@@ -13,6 +13,7 @@ venv/
 # 数据目录
 data/
 logs/
+/backups/
 
 # IDE
 .idea/
@@ -35,7 +36,8 @@ docker-compose(1).yml
 # Windows 本地虚拟环境
 .venv-win/
 
-# Local exports and archives
+# Local exports, archives, and duplicated project copies
+/Mako所有代码*/
 *.pdf
 *.zip
 

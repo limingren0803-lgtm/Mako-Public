@@ -174,7 +174,7 @@ class IntentRecognizer:
         if message not in tpls:
             tpls.append(message)
             self._tpl_embeddings.pop(correct, None)  # 下次重新计算
-            logger.info(f"学习新样本 → {correct.value}: {message[:40]}")
+            logger.info("学习新样本 → %s（%s 字）", correct.value, len(message))
 
     # ── 三路识别策略 ──────────────────────────────────────────────────────────
 
@@ -229,7 +229,7 @@ class IntentRecognizer:
                 data["intent"] = IntentCategory.OTHER
             return data
         except Exception as ex:
-            logger.warning(f"LLM 识别失败: {ex}")
+            logger.warning("LLM 识别失败: error_type=%s", type(ex).__name__)
             return {"intent": IntentCategory.OTHER, "confidence": 0.0, "reasoning": "LLM 失败", "failed": True}
 
     async def _embedding_recognize(self, message: str) -> Dict[str, Any]:
@@ -246,7 +246,7 @@ class IntentRecognizer:
 
             return {"intent": best_cat, "confidence": best_score}
         except Exception as ex:
-            logger.warning(f"Embedding 识别失败: {ex}")
+            logger.warning("Embedding 识别失败: error_type=%s", type(ex).__name__)
             return {"intent": IntentCategory.OTHER, "confidence": 0.0}
 
     def _pattern_recognize(self, message: str) -> Dict[str, Any]:
@@ -360,7 +360,10 @@ class IntentRecognizer:
                 resp = await embeddings.create(model="voyage-3-lite", input=[text])
                 return list(resp.data[0].embedding)
             except Exception as ex:
-                logger.warning(f"远端 Embedding 失败，使用本地向量兜底: {ex}")
+                logger.warning(
+                    "远端 Embedding 失败，使用本地向量兜底: error_type=%s",
+                    type(ex).__name__,
+                )
 
         return self._local_embedding(text)
 

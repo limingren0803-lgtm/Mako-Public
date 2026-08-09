@@ -23,3 +23,6 @@ data/.DS_Store
 
 config/grafana/
 config/nginx/ssl/
+
+# Local duplicated project bundle
+Mako所有代码*/

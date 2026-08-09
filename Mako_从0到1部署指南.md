@@ -66,7 +66,7 @@ skills/
 cp .env.example .env
 ```
 
-如果 `.env` 已经存在，不要直接覆盖。可以先备份：
+如果 `.env` 已经存在，可先备份再复制，避免直接覆盖：
 
 ```bash
 cp .env .env.backup
@@ -90,15 +90,22 @@ ANTHROPIC_MODEL=deepseek-v4-pro
 ANTHROPIC_API_KEY=你的真实_api_key
 ```
 
-Docker Compose 部署时，Redis 连接会由 `docker-compose.yml` 自动覆盖为容器内地址，通常不用手动改：
+Docker Compose 部署时，Redis 连接会由 `docker-compose.yml` 自动覆盖为容器内地址。请为 Redis 和管理接口分别生成随机密钥：
 
 ```env
-REDIS_PASSWORD=echomind123
+REDIS_PASSWORD=<your-redis-password>
+MAKO_ADMIN_API_KEY=<your-admin-key-at-least-32-characters>
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
 ```
 
-注意：`.env` 内含密钥，不要提交到 Git，也不要发给别人。
+Swagger 默认关闭。本地需要接口文档时设置：
+
+```env
+ENABLE_SWAGGER_UI=true
+```
+
+`.env` 内含密钥，应保留在本地，不进入 Git 或对外分享。
 
 ## 3. 一键启动完整服务
 
@@ -160,6 +167,8 @@ curl http://localhost/health
 
 ### 4.2 打开接口文档
 
+确认 `.env` 中的 `ENABLE_SWAGGER_UI=true` 后，浏览器访问：
+
 浏览器访问：
 
 ```text
@@ -172,7 +181,7 @@ http://localhost:8000/docs
 http://localhost/docs
 ```
 
-Swagger 页面中可以直接点击接口的 `Try it out` 测试服务。
+Swagger 页面中可以直接点击接口的 `Try it out` 测试服务。受保护接口还需要在请求头中提供 `X-Admin-Key`。
 
 ### 4.3 测试主对话接口
 
@@ -202,7 +211,7 @@ curl -X POST http://localhost:8000/chat \
 ### 4.4 查看知识库状态
 
 ```bash
-curl http://localhost:8000/knowledge/stats
+curl -H "X-Admin-Key: <your-admin-key>" http://localhost:8000/knowledge/stats
 ```
 
 如果返回 `total_chunks`，说明知识库接口可用。
@@ -220,13 +229,14 @@ data/demo_docs/troubleshooting.md
 
 ```bash
 curl -X POST http://localhost:8000/knowledge/upload \
+  -H "X-Admin-Key: <your-admin-key>" \
   -F "file=@data/demo_docs/sample_knowledge.json"
 ```
 
 再查询一次统计：
 
 ```bash
-curl http://localhost:8000/knowledge/stats
+curl -H "X-Admin-Key: <your-admin-key>" http://localhost:8000/knowledge/stats
 ```
 
 ### 4.6 测试知识库检索
@@ -240,7 +250,7 @@ curl -X POST "http://localhost:8000/search?query=产品经理面试准备&top_k=
 ### 4.7 查看监控
 
 ```bash
-curl http://localhost:8000/monitor
+curl -H "X-Admin-Key: <your-admin-key>" http://localhost:8000/monitor
 ```
 
 Prometheus 页面：
@@ -363,17 +373,13 @@ pip install -r requirements.txt
 源码启动时，本机访问 Redis 和 ChromaDB，推荐保持：
 
 ```env
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://:<your-redis-password>@localhost:6379/0
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
 CHROMA_PERSIST_DIRECTORY=./data/chroma
 ```
 
-如果 Redis 设置了密码，使用：
-
-```env
-REDIS_URL=redis://:echomind123@localhost:6379/0
-```
+`<your-redis-password>` 与本地 `.env` 中的 `REDIS_PASSWORD` 保持一致。
 
 ### 6.5 启动 API 服务
 
@@ -402,21 +408,27 @@ Mako 会从 `skills/` 目录加载业务规则，用于增强不同 Agent 的回
 查看当前已加载 Skills：
 
 ```bash
-curl http://localhost:8000/skills
+curl -H "X-Admin-Key: <your-admin-key>" http://localhost:8000/skills
 ```
 
 修改 `skills/` 下的 `SKILL.md` 后，可以热加载：
 
 ```bash
-curl -X POST http://localhost:8000/skills/reload
+curl -X POST http://localhost:8000/skills/reload \
+  -H "X-Admin-Key: <your-admin-key>"
 ```
 
 默认已有示例：
 
 ```text
-skills/general_customer_service/SKILL.md
+skills/general_assistant/SKILL.md
 skills/technical_support/SKILL.md
-skills/billing_support/SKILL.md
+skills/career_profile/SKILL.md
+skills/career_match/SKILL.md
+skills/career_jd/SKILL.md
+skills/career_resume/SKILL.md
+skills/career_interview/SKILL.md
+skills/career_planning/SKILL.md
 ```
 
 ## 8. 端口说明
@@ -535,19 +547,19 @@ docker compose up -d
 Docker Compose 模式下，主应用使用容器内地址：
 
 ```env
-REDIS_URL=redis://:echomind123@redis:6379/0
+REDIS_URL=redis://:<your-redis-password>@redis:6379/0
 ```
 
 源码本地启动时，应该使用本机地址：
 
 ```env
-REDIS_URL=redis://:echomind123@localhost:6379/0
+REDIS_URL=redis://:<your-redis-password>@localhost:6379/0
 ```
 
 测试 Redis：
 
 ```bash
-docker compose exec redis redis-cli -a echomind123 ping
+docker compose exec redis redis-cli -a <your-redis-password> ping
 ```
 
 正常返回：
@@ -596,6 +608,9 @@ cp .env.example .env
 
 ```env
 ANTHROPIC_API_KEY=你的真实_api_key
+REDIS_PASSWORD=<your-redis-password>
+MAKO_ADMIN_API_KEY=<your-admin-key-at-least-32-characters>
+ENABLE_SWAGGER_UI=true
 ```
 
 启动：

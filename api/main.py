@@ -20,10 +20,12 @@ if _ROOT not in sys.path:
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response, UploadFile, File
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from core.security import cors_origins, env_bool, require_admin_key, validate_identifier
 
 load_dotenv()
 
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v1.0.0             ║
+   ║           Mako  v1.2.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -186,26 +188,41 @@ async def lifespan(app: FastAPI):
 
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
+_swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
+
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="1.0.0",
+    version="1.2.0",
     lifespan=lifespan,
-    docs_url="/docs",
+    docs_url="/docs" if _swagger_enabled else None,
+    redoc_url="/redoc" if _swagger_enabled else None,
+    openapi_url="/openapi.json" if _swagger_enabled else None,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Admin-Key"],
+    allow_credentials=False,
 )
 
 
 # ── 请求/响应模型 ─────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
-    message:     str
-    user_id:     str = "anonymous"
-    conv_id:     Optional[str] = None
+    message:     str = Field(min_length=1, max_length=20000)
+    user_id:     str = Field(default="anonymous", max_length=128)
+    conv_id:     Optional[str] = Field(default=None, max_length=128)
+
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, value: str) -> str:
+        return validate_identifier(value, "user_id")
+
+    @field_validator("conv_id")
+    @classmethod
+    def validate_conv_id(cls, value: Optional[str]) -> Optional[str]:
+        return validate_identifier(value, "conv_id") if value is not None else None
 
 
 class ChatResponse(BaseModel):
@@ -226,7 +243,7 @@ async def health():
     return {"status": "ok", "agents": _orchestrator.get_stats()}
 
 
-@app.get("/skills", tags=["Skills"])
+@app.get("/skills", tags=["Skills"], dependencies=[Depends(require_admin_key)])
 async def skills_summary():
     """查看当前已加载的 Skills，便于确认热加载结果和排查解析错误。"""
     if _skill_manager is None:
@@ -234,7 +251,7 @@ async def skills_summary():
     return _skill_manager.summary()
 
 
-@app.post("/skills/reload", tags=["Skills"])
+@app.post("/skills/reload", tags=["Skills"], dependencies=[Depends(require_admin_key)])
 async def reload_skills():
     """运行时重新扫描 Skill 目录，不需要重启服务。"""
     if _skill_manager is None:
@@ -339,7 +356,7 @@ async def _build_knowledge_context(message: str, top_k: int = 3) -> tuple[str, b
         parts.append("请优先依据以上知识库内容回答；如果知识库信息不足，请明确说明，并仅结合已知上下文提供职业求职相关分析，不要编造用户经历或岗位事实。")
         return "\n".join(parts), True
     except Exception as ex:
-        logger.warning(f"构建知识库上下文失败: {ex}")
+        logger.warning("构建知识库上下文失败: error_type=%s", type(ex).__name__)
         return "", False
 
 
@@ -392,19 +409,23 @@ def _should_update_career_profile(message: str) -> bool:
     return any(keyword in msg for keyword in profile_keywords)
 
 
-@app.get("/monitor")
+@app.get("/monitor", dependencies=[Depends(require_admin_key)])
 async def monitor_summary():
     """实时监控摘要：Agent 成功率、工具统计、告警、优化建议。"""
     if _monitor is None:
         raise HTTPException(503, "服务未就绪")
     return _monitor.summary()
 
-@app.get("/debug/profile/{user_id}")
+@app.get("/debug/profile/{user_id}", dependencies=[Depends(require_admin_key)])
 async def debug_profile(user_id: str):
     """只读查看指定用户当前保存的用户画像。"""
     if _memory is None:
         raise HTTPException(503, "服务未就绪")
 
+    try:
+        user_id = validate_identifier(user_id, "user_id")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return await _memory._get_profile(user_id)
 
 @app.get("/metrics")
@@ -414,7 +435,10 @@ async def prometheus_metrics():
 
 
 @app.post("/search")
-async def search(query: str, top_k: int = 5):
+async def search(
+    query: str = Query(min_length=1, max_length=20000),
+    top_k: int = Query(default=5, ge=1, le=20),
+):
     """
     演示检索优化链路：查询改写 → 并行召回 → 重排 → Top-K。
     展示 MCP 工具调用的核心亮点。
@@ -427,13 +451,13 @@ async def search(query: str, top_k: int = 5):
 
 class DocInput(BaseModel):
     """单篇文档输入。"""
-    title:   str
-    content: str
+    title:   str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=1_000_000)
 
 
 class BatchDocInput(BaseModel):
     """批量文档导入请求体。"""
-    documents: List[DocInput]
+    documents: List[DocInput] = Field(min_length=1, max_length=100)
 
 
 class EvalIntentInput(BaseModel):
@@ -457,7 +481,7 @@ class EvalRunInput(BaseModel):
     dialog_cases: Optional[List[EvalDialogInput]] = None
 
 
-@app.post("/knowledge/add", tags=["知识库"])
+@app.post("/knowledge/add", tags=["知识库"], dependencies=[Depends(require_admin_key)])
 async def add_knowledge(body: BatchDocInput):
     """
     批量导入文档到知识库。
@@ -482,7 +506,7 @@ async def add_knowledge(body: BatchDocInput):
     return {"message": f"成功导入 {count} 个文档片段", "added_chunks": count, "total_chunks": kb.doc_count}
 
 
-@app.post("/knowledge/upload", tags=["知识库"])
+@app.post("/knowledge/upload", tags=["知识库"], dependencies=[Depends(require_admin_key)])
 async def upload_knowledge(file: UploadFile = File(...)):
     """
     上传文件导入知识库。
@@ -498,25 +522,43 @@ async def upload_knowledge(file: UploadFile = File(...)):
         raise HTTPException(503, "知识库未初始化")
     kb = tool.handler.__self__
 
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(413, "文件大小超过 10MB 限制")
+    filename = pathlib.Path(file.filename or "unknown").name
+    suffix = pathlib.Path(filename).suffix.lower()
+    if suffix not in {".txt", ".md", ".json"}:
+        raise HTTPException(415, "仅支持 .txt、.md 和 .json 文件")
 
-    text = content.decode("utf-8", errors="ignore")
-    filename = file.filename or "unknown"
+    max_bytes = 10 * 1024 * 1024
+    content = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        content.extend(chunk)
+        if len(content) > max_bytes:
+            raise HTTPException(413, "文件大小超过 10MB 限制")
 
-    if filename.endswith(".json"):
+    try:
+        text = bytes(content).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "文件必须使用 UTF-8 编码") from exc
+
+    if suffix == ".json":
         import json as _json
         try:
             docs = _json.loads(text)
             if not isinstance(docs, list):
                 raise HTTPException(400, "JSON 文件应为数组格式: [{title, content}, ...]")
+            validated = BatchDocInput(documents=docs)
+            docs = [doc.model_dump() for doc in validated.documents]
         except _json.JSONDecodeError as e:
             raise HTTPException(400, f"JSON 解析失败: {e}")
+        except ValidationError as exc:
+            raise HTTPException(422, "JSON 文档不符合导入限制") from exc
     else:
         # txt / md：整个文件作为一篇文档
         title = filename.rsplit(".", 1)[0] if "." in filename else filename
-        docs = [{"title": title, "content": text}]
+        try:
+            validated = BatchDocInput(documents=[{"title": title, "content": text}])
+            docs = [doc.model_dump() for doc in validated.documents]
+        except ValidationError as exc:
+            raise HTTPException(422, "文件标题或内容不符合导入限制") from exc
 
     count = kb.add_documents(docs)
     return {
@@ -526,7 +568,7 @@ async def upload_knowledge(file: UploadFile = File(...)):
     }
 
 
-@app.get("/knowledge/stats", tags=["知识库"])
+@app.get("/knowledge/stats", tags=["知识库"], dependencies=[Depends(require_admin_key)])
 async def knowledge_stats():
     """查看知识库统计信息（文档片段总数）。"""
     tool = _tool_manager._tools.get("knowledge_search") if _tool_manager else None
@@ -536,7 +578,7 @@ async def knowledge_stats():
     return {"total_chunks": kb.doc_count}
 
 
-@app.post("/eval/run")
+@app.post("/eval/run", dependencies=[Depends(require_admin_key)])
 async def run_eval(body: Optional[EvalRunInput] = None):
     """运行内置评测用例，返回评测报告。"""
     if _evaluator is None:

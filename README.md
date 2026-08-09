@@ -4,7 +4,7 @@ AI Career Intelligence System
 
 Mako 是一个面向求职场景的多 Agent 系统。它把用户的职业背景、目标岗位和历史对话组织成可复用的 CareerProfile，并针对岗位匹配、JD 分析、简历、面试和求职规划等任务选择对应能力。
 
-当前公开版本为 v1.0.0。本仓库不包含私有开发历史、真实密钥、运行数据或内部交接资料。
+当前公开版本为 v1.2.0。仓库包含可运行代码、自动化测试和部署文档；真实密钥、用户数据和本地运行产物不进入版本控制。
 
 ## V1 能力
 
@@ -47,15 +47,17 @@ POST /chat
   -> memory / profile / monitor / evaluation
 ```
 
-## V1 验证结果
+## v1.2.0 验证结果
 
 | 检查项 | 结果 |
 |---|---|
 | Python syntax / import | 通过 |
-| V1 自动回归测试 | 10/10 |
-| V1 内置评测 | 11/11 |
+| 确定性自动回归 | 45/45 |
+| 在线内置评测 | 16/16，通过率 1.0 |
+| Python 依赖审计 | 0 个已知漏洞 |
 | Docker Compose config | 通过 |
 | Docker image build | 通过 |
+| Docker 服务健康检查 | 5/5 healthy |
 | Career Intent 路由 | 6/6 路由到 CareerAgent |
 | Career Skill 注入 | 每次只注入对应的一个 Skill |
 
@@ -68,16 +70,22 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-在本地 `.env` 中填写服务地址、模型名和 API Key。`.env` 已被 Git 忽略，不应提交到仓库。
+在本地 `.env` 中填写服务地址、模型名和 API Key，同时设置随机的 `REDIS_PASSWORD` 和至少 32 个字符的 `MAKO_ADMIN_API_KEY`。`.env` 已被 Git 忽略，不进入仓库。
+
+Swagger 默认关闭。本地需要接口文档时，可在 `.env` 中设置：
+
+```env
+ENABLE_SWAGGER_UI=true
+```
 
 启动后可访问：
 
 | 地址 | 用途 |
 |---|---|
-| `http://localhost:8000/docs` | Swagger UI |
+| `http://localhost:8000/docs` | Swagger UI，需启用 `ENABLE_SWAGGER_UI` |
 | `http://localhost:8000/health` | 应用健康和 Agent 统计 |
-| `http://localhost:8000/skills` | Skill 加载摘要 |
-| `http://localhost:8000/monitor` | 监控摘要 |
+| `http://localhost:8000/skills` | Skill 加载摘要，需 `X-Admin-Key` |
+| `http://localhost:8000/monitor` | 监控摘要，需 `X-Admin-Key` |
 | `http://localhost:9090` | Prometheus |
 
 查看与停止服务：
@@ -126,17 +134,24 @@ skills/       动态业务规则
 mcp/          工具管理与知识库
 monitor/      运行监控
 evaluation/   意图与对话评测
-tests/        V1 自动回归测试
+tests/        自动回归与安全边界测试
+tools/        持久化备份和恢复验证工具
 ```
 
-## V1 兼容性
+## 数据兼容性
 
-对外品牌为 Mako。Docker service、container、image、network、volume 中的 `echomind`，以及 `ECHOMIND_*` 环境变量，是为了兼容已有部署和持久化数据而保留的工程标识。
+v1.2.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和持久化 volume 不变，不需要数据迁移。
 
-本次发布没有迁移 API 路径、Redis key、ChromaDB collection 或 CareerProfile Schema。
+## 项目文档
+
+- [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v1.2.0 Release Notes](RELEASE_NOTES_v1.2.0.md)
+- [Security Guide](SECURITY.md)
 
 ## 安全边界
 
 - `.env`、本地运行数据、日志、PDF、ZIP 和备份文件不进入公开提交。
 - 不提交真实用户简历、CareerProfile 或 ChromaDB 数据。
 - API Key 如果曾进入 Git 历史，应立即在服务商后台撤销并更换。
+- 管理、调试、知识库管理和评测接口使用独立的 `X-Admin-Key`。
+- 应用、Redis、ChromaDB 和 Prometheus 的直连端口默认仅绑定本机。

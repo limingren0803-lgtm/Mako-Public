@@ -303,7 +303,7 @@ class MCPToolManager:
         """
         # 1. 查询改写：生成多角度子查询
         sub_queries = await self.rewrite_query(query, n=3)
-        logger.info(f"查询改写: {query!r} → {sub_queries}")
+        logger.info("查询改写完成: source_length=%s sub_queries=%s", len(query), len(sub_queries))
 
         # 2. 并行召回：所有子查询同时检索
         recall_k = max(top_k, 5)

@@ -129,7 +129,7 @@ class BaseAgent:
         except Exception as ex:
             ms = (time.monotonic() - t0) * 1000
             self.stats.total_ms += ms
-            logger.error(f"{self.agent_type.value} 处理失败: {ex}")
+            logger.error("%s 处理失败: error_type=%s", self.agent_type.value, type(ex).__name__)
             return AgentResponse(
                 agent_type=self.agent_type,
                 content="抱歉，处理您的请求时出现问题，请稍后重试。",

@@ -30,6 +30,11 @@ from core.career_profile import CareerProfile
 logger = logging.getLogger(__name__)
 
 
+def _log_id(value: str) -> str:
+    """为日志生成不可逆的短标识，避免直接记录用户标识。"""
+    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
 class MsgRole(Enum):
     USER      = "user"
     ASSISTANT = "assistant"
@@ -167,8 +172,8 @@ class MemoryManager:
         messages = await self._get_working_memory(user_id, conv_id)
         logger.info(
             "PROFILE_UPDATE_STARTED user_id=%s conv_id=%s",
-            user_id,
-            conv_id,
+            _log_id(user_id),
+            _log_id(conv_id),
        )
         if not messages:
             return
@@ -238,16 +243,7 @@ class MemoryManager:
 
             logger.info(
                 "PROFILE_EXTRACTION_OK user_id=%s",
-                user_id,
-            )
-
-            logger.info(
-                "PROFILE_EXTRACTED_DATA user_id=%s data=%s",
-                user_id,
-                json.dumps(
-                    profile_data.get("career_profile", {}),
-                    ensure_ascii=True,
-                ),
+                _log_id(user_id),
             )
 
             existing_profile = await self._get_profile(user_id)
@@ -262,7 +258,7 @@ class MemoryManager:
 
             logger.info(
                 "PROFILE_VALIDATION_OK user_id=%s",
-                user_id,
+                _log_id(user_id),
             )
 
             doc_id = f"{user_id}_profile_{conv_id}"
@@ -282,13 +278,13 @@ class MemoryManager:
             )
             logger.info(
                 "PROFILE_UPDATE_OK user_id=%s",
-                user_id,
+                _log_id(user_id),
             )
         except Exception as ex:
-            logger.exception(
-                "PROFILE_UPDATE_FAILED user_id=%s error=%s",
-                user_id,
-                ex,
+            logger.error(
+                "PROFILE_UPDATE_FAILED user_id=%s error_type=%s",
+                _log_id(user_id),
+                type(ex).__name__,
             )
 
     # ── 读取 ──────────────────────────────────────────────────────────────────
@@ -369,7 +365,12 @@ class MemoryManager:
                 "ts": m.timestamp.isoformat(), "metadata": m.metadata,
             }))
         self._redis.expire(key, 86400)
-        logger.info(f"工作记忆压缩完成: {user_id}/{conv_id}，摘要 {len(summary)} 字")
+        logger.info(
+            "工作记忆压缩完成: user=%s conv=%s，摘要 %s 字",
+            _log_id(user_id),
+            _log_id(conv_id),
+            len(summary),
+        )
 
     # ── 内部辅助 ──────────────────────────────────────────────────────────────
 
@@ -402,7 +403,7 @@ class MemoryManager:
             docs = results["documents"][0] if results["documents"] else []
             return [self._safe_text(doc) for doc in docs if isinstance(doc, str) and doc.strip()]
         except Exception as ex:
-            logger.warning(f"情景记忆检索失败: {ex}")
+            logger.warning("情景记忆检索失败: error_type=%s", type(ex).__name__)
             return []
 
     async def _store_episodic(self, user_id: str, conv_id: str, text: str, summary: str) -> None:
@@ -421,7 +422,7 @@ class MemoryManager:
                             "ts": datetime.now().isoformat(), "full_text": self._safe_text(text[:500])}],
             )
         except Exception as ex:
-            logger.warning(f"存储情景记忆失败: {ex}")
+            logger.warning("存储情景记忆失败: error_type=%s", type(ex).__name__)
             
     @staticmethod
     def _merge_career_profile(
@@ -541,7 +542,11 @@ class MemoryManager:
 
             return json.loads(documents[latest_index])
         except Exception as ex:
-            logger.warning("读取用户画像失败 user_id=%s error=%s", user_id, ex)
+            logger.warning(
+                "读取用户画像失败 user_id=%s error_type=%s",
+                _log_id(user_id),
+                type(ex).__name__,
+            )
             return {}
 
     @staticmethod

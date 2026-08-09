@@ -487,11 +487,23 @@ DEFAULT_INTENT_CASES: List[IntentTestCase] = [
 
     # Career 场景：测试 Mako 的核心职业意图
     IntentTestCase("请根据我的教育和实习经历分析我的求职优势和短板",        "career_profile",),
+    IntentTestCase("请客观分析我的海外学历认可度和实习竞争力",              "career_profile",),
+    IntentTestCase("帮我做一次背景诊断，看看能力差距在哪里",                "career_profile",),
     IntentTestCase("根据我的背景，我更适合哪些岗位方向？",                 "career_match",),
-    IntentTestCase("帮我分析一下这个产品运营岗位 JD 的核心要求",           "career_jd",),
+    IntentTestCase("我适合投什么岗位，哪些方向可以作为备选？",              "career_match",),
+    IntentTestCase("请按匹配度给我推荐岗位方向",                          "career_match",),
+    IntentTestCase("帮我分析一下这个产品运营岗位JD的核心要求",             "career_jd",),
+    IntentTestCase("请拆解这份职位描述里的职责和隐藏要求",                 "career_jd",),
+    IntentTestCase("这份招聘要求最看重哪些能力？",                        "career_jd",),
     IntentTestCase("请根据目标岗位帮我优化这段简历经历",                  "career_resume",),
+    IntentTestCase("帮我修改简历里的项目描述，但不要补写不存在的数据",       "career_resume",),
+    IntentTestCase("这段经历怎样写进 resume 才更贴近岗位？",              "career_resume",),
     IntentTestCase("这个岗位面试可能会问什么问题？",                     "career_interview",),
-    IntentTestCase("请帮我制定接下来一个月的求职行动计划",               "career_planning",),
+    IntentTestCase("请根据 JD 帮我准备行为面试和业务面试",                 "career_interview",),
+    IntentTestCase("我们做一轮模拟面试，并指出回答中的问题",               "career_interview",),
+    IntentTestCase("请帮我制定接下来一个月的求职规划",                   "career_planning",),
+    IntentTestCase("请按秋招时间线安排我的求职投递计划",                  "career_planning",),
+    IntentTestCase("未来半年应该补实习还是补项目？",                      "career_planning",),
 ]
 
 DEFAULT_DIALOG_CASES: List[Dict[str, Any]] = [
@@ -510,4 +522,25 @@ DEFAULT_DIALOG_CASES: List[Dict[str, Any]] = [
     {"question": "帮我准备这个岗位可能出现的面试问题"},
     {"question": "请帮我制定未来一个月的求职准备计划"},
     {"turns": [ "你好，我想申请产品运营岗位", "请先帮我分析这个岗位需要什么能力", "再结合我的经历判断有哪些匹配点和缺口", "最后告诉我简历中应该重点突出哪些经历"]},
+    {
+        "question": (
+            "我是市场营销本科应届生，有一段校园公众号运营经历，负责选题、排期和数据复盘；"
+            "会使用 Excel，SQL 只学过基础查询，目标是上海的产品运营岗位。"
+            "请基于这些已知事实分析我的优势、短板和仍需确认的信息，不要补充未提供的经历。"
+        )
+    },
+    {
+        "question": (
+            "目标岗位是用户运营。我的原始经历是：维护校园公众号，每周发布两篇文章，"
+            "根据阅读和转发数据调整选题。请优化成简历表述；没有提供的数据请保留为待确认项，"
+            "不要虚构增长比例。"
+        )
+    },
+    {
+        "turns": [
+            "我想投上海的产品运营，但不能接受长期出差。",
+            "我有校园活动策划经历，会 Excel，SQL 只会基础查询。",
+            "请根据前面两轮信息给出主投方向、风险和两周行动计划。",
+        ]
+    },
 ]

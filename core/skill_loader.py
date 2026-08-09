@@ -181,9 +181,9 @@ class SkillManager:
 
         if not blocks:
             logger.debug(
-                "Skills 未命中: agent=%s message=%r",
+                "Skills 未命中: agent=%s message_length=%s",
                 agent_type or "all",
-                (message or "")[:80],
+                len(message or ""),
             )
             return ""
 
@@ -192,10 +192,10 @@ class SkillManager:
             for skill, keywords in matched
         )
         logger.info(
-            "Skills 已注入: agent=%s matched=%s message=%r",
+            "Skills 已注入: agent=%s matched=%s message_length=%s",
             agent_type or "all",
             detail,
-            (message or "")[:80],
+            len(message or ""),
         )
 
         return (
