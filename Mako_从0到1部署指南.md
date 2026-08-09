@@ -180,7 +180,7 @@ Swagger 页面中可以直接点击接口的 `Try it out` 测试服务。
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "我的订单什么时候发货？",
+    "message": "请根据我的背景分析求职优势和短板",
     "user_id": "user_001",
     "conv_id": "session_001"
   }'
@@ -232,7 +232,7 @@ curl http://localhost:8000/knowledge/stats
 ### 4.6 测试知识库检索
 
 ```bash
-curl -X POST "http://localhost:8000/search?query=退款多久到账&top_k=3"
+curl -X POST "http://localhost:8000/search?query=产品经理面试准备&top_k=3"
 ```
 
 如果返回 `results`，说明 ChromaDB 检索链路可用。
@@ -610,7 +610,7 @@ docker compose up -d --build
 curl http://localhost:8000/health
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"你好，我想查询订单","user_id":"demo_user","conv_id":"demo_session"}'
+  -d '{"message":"请帮我做求职背景诊断","user_id":"demo_user","conv_id":"demo_session"}'
 ```
 
 浏览器打开：
