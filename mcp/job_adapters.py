@@ -423,11 +423,17 @@ ADAPTER_TYPES: Dict[str, Type[JsonLdJobAdapter]] = {
 }
 
 
-def adapter_for_source(source_id: str) -> JsonLdJobAdapter:
-    try:
-        return ADAPTER_TYPES[source_id]()
-    except KeyError as exc:
-        raise JobAdapterError("no job adapter is registered for this source") from exc
+def adapter_for_source(
+    source_id: str,
+    *,
+    allow_generic: bool = False,
+) -> JsonLdJobAdapter:
+    adapter_type = ADAPTER_TYPES.get(source_id)
+    if adapter_type:
+        return adapter_type()
+    if allow_generic:
+        return JsonLdJobAdapter()
+    raise JobAdapterError("no job adapter is registered for this source")
 
 
 def context_for_source(source_id: str, *, fetched_at: Optional[datetime] = None) -> JobAdapterContext:

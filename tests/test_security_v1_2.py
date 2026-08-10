@@ -73,6 +73,10 @@ class SecurityConfigurationTests(unittest.TestCase):
             "/knowledge/add",
             "/knowledge/upload",
             "/knowledge/stats",
+            "/jobs/sources/{source_id}/refresh",
+            "/jobs/import/url",
+            "/jobs/import/structured",
+            "/jobs",
             "/eval/run",
         }
         routes = {route.path: route for route in api_main.app.routes}

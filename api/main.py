@@ -11,6 +11,7 @@ import pathlib
 import sys
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v1.5.0             ║
+   ║           Mako  v1.6.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -209,7 +210,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="1.5.0",
+    version="1.6.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -692,6 +693,16 @@ class KnowledgeSourceInput(BaseModel):
     refresh_policy: str = Field(default="manual", pattern="^(manual|disabled)$")
     automation_allowed: bool = False
     policy_url: Optional[str] = Field(default=None, max_length=2000)
+    industry: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    recruitment_channels: List[str] = Field(default_factory=list, max_length=10)
+    support_level: str = Field(
+        default="official_directory",
+        pattern="^(official_directory|manual_import|structured_import|managed_refresh)$",
+    )
+    verified_at: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    )
 
     @field_validator("official_domain")
     @classmethod
@@ -712,6 +723,22 @@ class KnowledgeSourceInput(BaseModel):
             normalized.append(domain)
         return sorted(set(normalized))
 
+    @field_validator("recruitment_channels")
+    @classmethod
+    def normalize_recruitment_channels(cls, values: List[str]) -> List[str]:
+        allowed = {"campus", "experienced", "internship", "graduate", "other"}
+        normalized = sorted(set(value.strip().lower() for value in values if value.strip()))
+        if any(value not in allowed for value in normalized):
+            raise ValueError("invalid recruitment channel")
+        return normalized
+
+    @field_validator("verified_at")
+    @classmethod
+    def validate_verified_at(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            datetime.strptime(value, "%Y-%m-%d")
+        return value
+
 
 class DocumentStatusInput(BaseModel):
     status: str = Field(pattern="^(inactive|closed)$")
@@ -725,6 +752,47 @@ class SourcePolicyInput(BaseModel):
     refresh_policy: str = Field(pattern="^(manual|disabled)$")
     automation_allowed: bool = False
     policy_url: Optional[str] = Field(default=None, max_length=2000)
+
+
+class JobUrlImportInput(BaseModel):
+    source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    source_url: str = Field(min_length=1, max_length=2000)
+
+
+class JobStructuredImportInput(BaseModel):
+    source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    source_url: str = Field(min_length=1, max_length=2000)
+    external_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=500)
+    department: Optional[str] = Field(default=None, max_length=500)
+    job_category: Optional[str] = Field(default=None, max_length=200)
+    recruitment_type: str = Field(
+        default="other",
+        pattern="^(campus|experienced|internship|graduate|other)$",
+    )
+    employment_type: Optional[str] = Field(default=None, max_length=200)
+    locations: List[str] = Field(default_factory=list, max_length=20)
+    responsibilities: List[str] = Field(default_factory=list, max_length=100)
+    requirements: List[str] = Field(default_factory=list, max_length=100)
+    description: str = Field(default="", max_length=100_000)
+    published_at: Optional[datetime] = None
+    source_updated_at: Optional[datetime] = None
+    valid_through: Optional[datetime] = None
+
+    @field_validator("locations", "responsibilities", "requirements")
+    @classmethod
+    def normalize_job_text_lists(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen = set()
+        for value in values:
+            clean = " ".join(value.split())
+            if len(clean) > 2000:
+                raise ValueError("job list item exceeds 2000 characters")
+            key = clean.casefold()
+            if clean and key not in seen:
+                normalized.append(clean)
+                seen.add(key)
+        return normalized
 
 
 class DocumentUpdateInput(BaseModel):
@@ -792,11 +860,29 @@ async def register_knowledge_source(body: KnowledgeSourceInput):
 
 
 @app.get("/knowledge/sources", tags=["知识库"], dependencies=[Depends(require_admin_key)])
-async def list_knowledge_sources(status: Optional[str] = Query(default=None)):
+async def list_knowledge_sources(
+    status: Optional[str] = Query(default=None),
+    industry: Optional[str] = Query(default=None, max_length=100),
+    support_level: Optional[str] = Query(default=None, max_length=50),
+):
     """List registered sources and their refresh state."""
     if status not in {None, "active", "inactive"}:
         raise HTTPException(422, "invalid source status")
-    return {"sources": _knowledge_base_instance().list_sources(status=status)}
+    if support_level not in {
+        None,
+        "official_directory",
+        "manual_import",
+        "structured_import",
+        "managed_refresh",
+    }:
+        raise HTTPException(422, "invalid source support level")
+    return {
+        "sources": _knowledge_base_instance().list_sources(
+            status=status,
+            industry=industry,
+            support_level=support_level,
+        )
+    }
 
 
 @app.patch(
@@ -909,6 +995,82 @@ async def refresh_official_job_source(source_id: str):
         raise HTTPException(422, str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(502, "official job source could not be refreshed") from exc
+
+
+@app.get("/jobs/sources", tags=["职位情报"])
+async def list_public_job_sources(
+    industry: Optional[str] = Query(default=None, max_length=100),
+    support_level: Optional[str] = Query(default=None, max_length=50),
+):
+    """List verified official recruitment entry points without operational policy fields."""
+    if support_level not in {
+        None,
+        "official_directory",
+        "manual_import",
+        "structured_import",
+        "managed_refresh",
+    }:
+        raise HTTPException(422, "invalid source support level")
+    sources = _knowledge_base_instance().list_sources(
+        status="active",
+        industry=industry,
+        support_level=support_level,
+    )
+    public_fields = (
+        "source_id",
+        "company_name",
+        "official_domain",
+        "source_url",
+        "industry",
+        "recruitment_channels",
+        "support_level",
+        "verified_at",
+    )
+    items = [{key: source.get(key) for key in public_fields} for source in sources]
+    return {"count": len(items), "sources": items}
+
+
+@app.post(
+    "/jobs/import/url",
+    tags=["职位情报"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def import_official_job_url(body: JobUrlImportInput):
+    """Import supported structured data from one operator-selected official page."""
+    from mcp.job_adapters import JobAdapterError
+    from mcp.knowledge_sources import SourceSecurityError
+
+    try:
+        return await _knowledge_base_instance().import_job_url(
+            body.source_id,
+            body.source_url,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "job source not found") from exc
+    except (SourceSecurityError, JobAdapterError, ValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "official job page could not be imported") from exc
+
+
+@app.post(
+    "/jobs/import/structured",
+    tags=["职位情报"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def import_structured_job(body: JobStructuredImportInput):
+    """Import one structured JD tied to a registered official page."""
+    from mcp.knowledge_sources import SourceSecurityError
+
+    try:
+        return _knowledge_base_instance().import_job_posting(
+            body.source_id,
+            body.model_dump(exclude={"source_id"}, exclude_none=True),
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "job source not found") from exc
+    except (SourceSecurityError, ValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.get(

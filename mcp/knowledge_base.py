@@ -318,8 +318,18 @@ class KnowledgeBase:
             validate_source_url(kwargs["policy_url"], allowed_domains)
         return self._registry.register_source(**kwargs)
 
-    def list_sources(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        return self._registry.list_sources(status=status)
+    def list_sources(
+        self,
+        status: Optional[str] = None,
+        *,
+        industry: Optional[str] = None,
+        support_level: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.list_sources(
+            status=status,
+            industry=industry,
+            support_level=support_level,
+        )
 
     def get_source(self, source_id: str) -> Optional[Dict[str, Any]]:
         return self._registry.get_source(source_id)
@@ -364,6 +374,24 @@ class KnowledgeBase:
         from mcp.job_pipeline import refresh_job_source
 
         return await refresh_job_source(registry=self._registry, source_id=source_id)
+
+    async def import_job_url(self, source_id: str, source_url: str) -> Dict[str, Any]:
+        from mcp.job_pipeline import import_job_url
+
+        return await import_job_url(
+            registry=self._registry,
+            source_id=source_id,
+            source_url=source_url,
+        )
+
+    def import_job_posting(self, source_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from mcp.job_pipeline import import_job_posting
+
+        return import_job_posting(
+            registry=self._registry,
+            source_id=source_id,
+            payload=payload,
+        )
 
     def search_job_postings(self, query: str, *, limit: int = 5) -> List[Dict[str, Any]]:
         return self._registry.search_job_postings(query, limit=limit)

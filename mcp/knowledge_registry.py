@@ -54,6 +54,10 @@ class KnowledgeRegistry:
                     refresh_policy TEXT NOT NULL DEFAULT 'manual',
                     automation_allowed INTEGER NOT NULL DEFAULT 0,
                     policy_url TEXT,
+                    industry TEXT,
+                    recruitment_channels TEXT NOT NULL DEFAULT '[]',
+                    support_level TEXT NOT NULL DEFAULT 'official_directory',
+                    verified_at TEXT,
                     status TEXT NOT NULL DEFAULT 'active',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -140,6 +144,18 @@ class KnowledgeRegistry:
                 connection.execute("ALTER TABLE sources ADD COLUMN policy_url TEXT")
             if "job_source_url" not in source_columns:
                 connection.execute("ALTER TABLE sources ADD COLUMN job_source_url TEXT")
+            if "industry" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN industry TEXT")
+            if "recruitment_channels" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE sources ADD COLUMN recruitment_channels TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "support_level" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE sources ADD COLUMN support_level TEXT NOT NULL DEFAULT 'official_directory'"
+                )
+            if "verified_at" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN verified_at TEXT")
 
     def register_source(
         self,
@@ -153,20 +169,26 @@ class KnowledgeRegistry:
         refresh_policy: str = "manual",
         automation_allowed: bool = False,
         policy_url: Optional[str] = None,
+        industry: Optional[str] = None,
+        recruitment_channels: Optional[List[str]] = None,
+        support_level: str = "official_directory",
+        verified_at: Optional[str] = None,
         source_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = _utc_now()
         source_id = source_id or f"src_{uuid.uuid4().hex[:16]}"
         delegated = sorted(set(delegated_domains or []))
+        channels = sorted(set(recruitment_channels or []))
         with self._lock, self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO sources (
                     source_id, company_name, official_domain, source_url, job_source_url,
                     delegated_domains, source_type, refresh_policy,
-                    automation_allowed, policy_url, status,
+                    automation_allowed, policy_url, industry, recruitment_channels,
+                    support_level, verified_at, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
                 """,
                 (
                     source_id,
@@ -179,6 +201,10 @@ class KnowledgeRegistry:
                     refresh_policy,
                     int(automation_allowed),
                     policy_url,
+                    industry,
+                    json.dumps(channels, ensure_ascii=False),
+                    support_level,
+                    verified_at,
                     now,
                     now,
                 ),
@@ -193,12 +219,22 @@ class KnowledgeRegistry:
             raise ValueError("catalog sources require a stable source_id")
         existing = self.get_source(source_id)
         if existing:
+            updates: Dict[str, Any] = {}
             job_source_url = kwargs.get("job_source_url")
             if job_source_url and not existing.get("job_source_url"):
+                updates["job_source_url"] = job_source_url
+            for key in ("industry", "support_level", "verified_at"):
+                if kwargs.get(key) and kwargs.get(key) != existing.get(key):
+                    updates[key] = kwargs[key]
+            channels = sorted(set(kwargs.get("recruitment_channels") or []))
+            if channels and channels != existing.get("recruitment_channels"):
+                updates["recruitment_channels"] = json.dumps(channels, ensure_ascii=False)
+            if updates:
+                assignments = ", ".join(f"{key} = ?" for key in updates)
                 with self._lock, self._connection() as connection:
                     connection.execute(
-                        "UPDATE sources SET job_source_url = ?, updated_at = ? WHERE source_id = ?",
-                        (job_source_url, _utc_now(), source_id),
+                        f"UPDATE sources SET {assignments}, updated_at = ? WHERE source_id = ?",
+                        (*updates.values(), _utc_now(), source_id),
                     )
                 return self.get_source(source_id) or existing
             return existing
@@ -217,15 +253,30 @@ class KnowledgeRegistry:
             ).fetchone()
         return self._source_row(row) if row else None
 
-    def list_sources(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_sources(
+        self,
+        status: Optional[str] = None,
+        *,
+        industry: Optional[str] = None,
+        support_level: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         query = "SELECT * FROM sources"
-        params: tuple[Any, ...] = ()
+        clauses: List[str] = []
+        params: List[Any] = []
         if status:
-            query += " WHERE status = ?"
-            params = (status,)
+            clauses.append("status = ?")
+            params.append(status)
+        if industry:
+            clauses.append("industry = ?")
+            params.append(industry)
+        if support_level:
+            clauses.append("support_level = ?")
+            params.append(support_level)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY company_name, source_id"
         with self._connection() as connection:
-            rows = connection.execute(query, params).fetchall()
+            rows = connection.execute(query, tuple(params)).fetchall()
         return [self._source_row(row) for row in rows]
 
     def set_source_status(self, source_id: str, status: str) -> Dict[str, Any]:
@@ -796,5 +847,8 @@ class KnowledgeRegistry:
     def _source_row(row: sqlite3.Row) -> Dict[str, Any]:
         result = dict(row)
         result["delegated_domains"] = json.loads(result.get("delegated_domains") or "[]")
+        result["recruitment_channels"] = json.loads(
+            result.get("recruitment_channels") or "[]"
+        )
         result["automation_allowed"] = bool(result.get("automation_allowed"))
         return result
