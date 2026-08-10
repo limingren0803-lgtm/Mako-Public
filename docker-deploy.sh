@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 配置
-PROJECT_NAME="echomind"
+PROJECT_NAME="mako"
 COMPOSE_FILE="docker-compose.yml"
 ENV_FILE=".env"
 
@@ -197,10 +197,10 @@ backup_data() {
 
     # 备份 Redis 数据
     docker-compose exec -T redis redis-cli SAVE
-    docker cp echomind-redis:/data/dump.rdb "$backup_dir/"
+    docker cp mako-redis:/data/dump.rdb "$backup_dir/"
 
     # 备份 ChromaDB 数据
-    docker cp echomind-chromadb:/chroma/chroma "$backup_dir/"
+    docker cp mako-chromadb:/chroma/chroma "$backup_dir/"
 
     # 备份配置
     cp .env "$backup_dir/"
@@ -232,10 +232,10 @@ restore_data() {
         docker-compose stop
 
         # 恢复 Redis 数据
-        docker cp "$backup_dir/dump.rdb" echomind-redis:/data/
+        docker cp "$backup_dir/dump.rdb" mako-redis:/data/
 
         # 恢复 ChromaDB 数据
-        docker cp "$backup_dir/chroma" echomind-chromadb:/chroma/
+        docker cp "$backup_dir/chroma" mako-chromadb:/chroma/
 
         # 恢复配置
         cp "$backup_dir/.env" .env
@@ -275,7 +275,7 @@ Mako — AI Career Intelligence System - Docker 部署脚本
 示例:
     ./docker-deploy.sh install
     ./docker-deploy.sh start
-    ./docker-deploy.sh logs echomind
+    ./docker-deploy.sh logs mako
     ./docker-deploy.sh backup
     ./docker-deploy.sh restore backups/20231201_120000
 

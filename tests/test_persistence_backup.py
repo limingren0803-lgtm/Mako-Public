@@ -37,7 +37,7 @@ class PersistenceBackupValidationTests(unittest.TestCase):
         manifest = {
             "schema_version": ARCHIVE_SCHEMA_VERSION,
             "created_at": "2026-08-10T00:00:00+00:00",
-            "compose_project": "echomind",
+            "compose_project": "mako",
             "archives": archives,
         }
         (root / "manifest.json").write_text(

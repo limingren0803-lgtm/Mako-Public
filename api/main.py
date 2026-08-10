@@ -20,12 +20,16 @@ if _ROOT not in sys.path:
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request as FastAPIRequest, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, ValidationError, field_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core.security import cors_origins, env_bool, require_admin_key, validate_identifier
+from core.config import env_int_with_legacy, env_with_legacy
 
 load_dotenv()
 
@@ -38,7 +42,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v1.2.0             ║
+   ║           Mako  v1.3.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -93,10 +97,18 @@ async def lifespan(app: FastAPI):
     )
 
     # Skills：启动时从目录加载业务能力说明，并在 Agent 调用 LLM 时动态注入。
-    skills_dir = os.getenv("ECHOMIND_SKILLS_DIR", str(pathlib.Path(_ROOT) / "skills"))
+    skills_dir = env_with_legacy(
+        "MAKO_SKILLS_DIR",
+        "ECHOMIND_SKILLS_DIR",
+        str(pathlib.Path(_ROOT) / "skills"),
+    )
     _skill_manager = SkillManager(
         root_dir=skills_dir,
-        max_prompt_chars=int(os.getenv("ECHOMIND_SKILLS_MAX_PROMPT_CHARS", "18000")),
+        max_prompt_chars=env_int_with_legacy(
+            "MAKO_SKILLS_MAX_PROMPT_CHARS",
+            "ECHOMIND_SKILLS_MAX_PROMPT_CHARS",
+            18000,
+        ),
     )
     _skill_manager.load()
 
@@ -192,7 +204,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="1.2.0",
+    version="1.3.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -203,9 +215,94 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Admin-Key"],
+    allow_headers=["Content-Type", "X-Admin-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
     allow_credentials=False,
 )
+
+
+def _http_request_id(request: FastAPIRequest) -> str:
+    """Return the validated request ID created by middleware."""
+    return getattr(request.state, "request_id", uuid.uuid4().hex)
+
+
+def _error_code(status_code: int) -> str:
+    return {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        413: "payload_too_large",
+        415: "unsupported_media_type",
+        422: "validation_error",
+        503: "service_unavailable",
+    }.get(status_code, "http_error")
+
+
+@app.middleware("http")
+async def attach_request_id(request: FastAPIRequest, call_next):
+    supplied = request.headers.get("X-Request-ID", "").strip()
+    try:
+        request_id = validate_identifier(supplied, "X-Request-ID") if supplied else uuid.uuid4().hex
+    except ValueError:
+        request_id = uuid.uuid4().hex
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_response(request: FastAPIRequest, exc: StarletteHTTPException):
+    message = exc.detail if isinstance(exc.detail, str) else "请求处理失败"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": _error_code(exc.status_code),
+                "message": message,
+                "request_id": _http_request_id(request),
+            }
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_response(request: FastAPIRequest, exc: RequestValidationError):
+    details = [
+        {
+            "field": ".".join(str(part) for part in error.get("loc", ())[1:]),
+            "message": error.get("msg", "Invalid value"),
+            "type": error.get("type", "validation_error"),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "validation_error",
+                "message": "请求参数不符合接口约束",
+                "request_id": _http_request_id(request),
+                "details": details,
+            }
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def internal_error_response(request: FastAPIRequest, exc: Exception):
+    logger.error("请求处理失败: request_id=%s error_type=%s", _http_request_id(request), type(exc).__name__)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "internal_error",
+                "message": "服务暂时无法完成请求",
+                "request_id": _http_request_id(request),
+            }
+        },
+    )
 
 
 # ── 请求/响应模型 ─────────────────────────────────────────────────────────────
@@ -226,6 +323,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    request_id:  str
     conv_id:     str
     response:    str
     intent:      str
@@ -233,6 +331,9 @@ class ChatResponse(BaseModel):
     review_required: bool
     latency_ms:  float
     knowledge_used: bool = False
+    response_complete: bool = True
+    continuation_used: bool = False
+    quality_flags: List[str] = Field(default_factory=list)
 
 
 # ── 路由 ──────────────────────────────────────────────────────────────────────
@@ -263,7 +364,7 @@ async def reload_skills():
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, http_request: FastAPIRequest):
     """
     主对话接口。完整流程：
       记忆读取 → 意图识别 → Agent 路由 → 执行 → 记忆写入
@@ -297,6 +398,7 @@ async def chat(req: ChatRequest):
         conv_id=conv_id,
         context=full_context,
         history=history,
+        request_id=_http_request_id(http_request),
     )
 
     # 3. 执行
@@ -313,6 +415,7 @@ async def chat(req: ChatRequest):
         )
 
     return ChatResponse(
+        request_id=result.request_id,
         conv_id=conv_id,
         response=result.response,
         intent=result.intent.value if result.intent else "other",
@@ -320,6 +423,9 @@ async def chat(req: ChatRequest):
         review_required=result.review_required,
         latency_ms=round(result.latency_ms, 1),
         knowledge_used=knowledge_used,
+        response_complete=result.response_complete,
+        continuation_used=result.continuation_used,
+        quality_flags=result.quality_flags,
     )
 
 
@@ -640,8 +746,16 @@ async def _cli():
 
     cfg = _anthropic_cfg()
     skill_manager = SkillManager(
-        root_dir=os.getenv("ECHOMIND_SKILLS_DIR", str(pathlib.Path(_ROOT) / "skills")),
-        max_prompt_chars=int(os.getenv("ECHOMIND_SKILLS_MAX_PROMPT_CHARS", "18000")),
+        root_dir=env_with_legacy(
+            "MAKO_SKILLS_DIR",
+            "ECHOMIND_SKILLS_DIR",
+            str(pathlib.Path(_ROOT) / "skills"),
+        ),
+        max_prompt_chars=env_int_with_legacy(
+            "MAKO_SKILLS_MAX_PROMPT_CHARS",
+            "ECHOMIND_SKILLS_MAX_PROMPT_CHARS",
+            18000,
+        ),
     )
     skill_manager.load()
     orch = AgentOrchestrator(

@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Mako 镜像运行脚本（保留 echomind 镜像和容器名以兼容 V1）
+# Mako 镜像运行脚本
 # 提供多种运行配置选项
 
 set -e
 
 # 配置
-IMAGE_NAME="echomind"
-CONTAINER_NAME="echomind-app"
+IMAGE_NAME="mako"
+CONTAINER_NAME="mako-app"
 VERSION=${VERSION:-latest}
 REGISTRY=""  # 如果镜像在私有仓库，设置为 registry.example.com/
 

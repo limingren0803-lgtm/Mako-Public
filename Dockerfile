@@ -36,21 +36,21 @@ RUN mkdir -p /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2 && \
 FROM base AS production
 
 # 非 root 用户运行。先创建用户，后续 COPY 直接带 owner，避免 chown -R 复制出额外大层。
-RUN useradd -m -u 1000 echomind
+RUN useradd -m -u 1000 mako
 
 # 从依赖阶段复制已安装的包
 COPY --from=dependencies /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 # 复制预下载的 ONNX 模型缓存
-COPY --from=dependencies --chown=echomind:echomind /root/.cache/chroma /home/echomind/.cache/chroma
+COPY --from=dependencies --chown=mako:mako /root/.cache/chroma /home/mako/.cache/chroma
 
 # 复制应用代码
-COPY --chown=echomind:echomind . .
+COPY --chown=mako:mako . .
 
 # 创建必要目录，只调整运行期需要写入的目录权限，避免递归 chown 整个应用。
 RUN mkdir -p /app/data/chroma /app/logs /app/config && \
-    chown echomind:echomind /app/data /app/data/chroma /app/logs /app/config
-USER echomind
+    chown mako:mako /app/data /app/data/chroma /app/logs /app/config
+USER mako
 
 EXPOSE 8000
 

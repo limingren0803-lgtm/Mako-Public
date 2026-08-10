@@ -1,6 +1,6 @@
 # Mako Security Guide
 
-This guide describes the security boundary introduced in Mako v1.2.0. It does not replace authentication at an application or identity-provider layer.
+This guide describes the security boundary introduced in Mako v1.2.0 and the compatible runtime naming changes prepared for v1.3.0. It does not replace authentication at an application or identity-provider layer.
 
 ## Management API key
 
@@ -33,7 +33,7 @@ Use this header only over localhost or HTTPS. Plain HTTP does not protect header
 
 ## Network exposure
 
-Docker Compose binds the direct application, Redis, ChromaDB, and Prometheus ports to `127.0.0.1`. Containers continue to communicate through the internal Compose network, so the Redis and ChromaDB data locations and volume names remain unchanged. Nginx remains the externally exposed HTTP entry point on port 80.
+Docker Compose binds the direct application, Redis, ChromaDB, and Prometheus ports to `127.0.0.1`. Containers communicate through `mako-network`. Redis, ChromaDB, Prometheus, and Nginx volumes use explicit compatibility names so upgrades reuse existing data while new installations can create the same volumes automatically. Nginx remains the externally exposed HTTP entry point on port 80.
 
 `REDIS_PASSWORD` is required when Compose resolves its configuration. Existing deployments can keep their current password; new deployments should use a long random value.
 

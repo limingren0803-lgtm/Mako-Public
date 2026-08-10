@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Mako 镜像构建脚本（V1 保留 echomind 镜像名以兼容现有部署）
+# Mako 镜像构建脚本
 # 提供多种构建选项供不同场景使用
 
 set -e
@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # 配置
-IMAGE_NAME="echomind"
+IMAGE_NAME="mako"
 REGISTRY=""  # 如果需要推送到私有仓库，设置为 registry.example.com/
 VERSION=${VERSION:-latest}
 BUILD_ARGS=""
@@ -62,7 +62,7 @@ Mako Docker 镜像构建工具
     ./build-image.sh build --no-cache
     ./build-image.sh build --platform linux/amd64,linux/arm64
     ./build-image.sh push --registry my-registry.com
-    ./build-image.sh tag --version v1.0.0
+    ./build-image.sh tag --version v1.1.0
 
 EOF
 }

@@ -105,7 +105,7 @@ def create_backup(output_root: Path) -> Path:
     manifest: dict[str, Any] = {
         "schema_version": ARCHIVE_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "compose_project": "echomind",
+        "compose_project": "mako",
         "archives": {},
     }
 

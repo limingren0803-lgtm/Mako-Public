@@ -1,14 +1,4 @@
-"""
-亮点：端到端意图识别
-
-三路融合策略：
-  1. LLM 语义理解（权重 70%）—— 主力，理解复杂语义和上下文
-  2. Embedding 向量相似度（权重 20%）—— 快速匹配常见表达
-  3. 关键词模式匹配（权重 10%）—— 零延迟兜底
-
-三路结果通过加权投票合并，置信度低于阈值时降级为 OTHER。
-LLM 和 Embedding 并行调用，不串行等待。
-"""
+"""Intent recognition with LLM, embedding, and keyword fallbacks."""
 import asyncio
 import hashlib
 import json

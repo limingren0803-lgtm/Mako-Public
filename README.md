@@ -4,7 +4,7 @@ AI Career Intelligence System
 
 Mako 是一个面向求职场景的多 Agent 系统。它把用户的职业背景、目标岗位和历史对话组织成可复用的 CareerProfile，并针对岗位匹配、JD 分析、简历、面试和求职规划等任务选择对应能力。
 
-当前公开版本为 v1.2.0。仓库包含可运行代码、自动化测试和部署文档；真实密钥、用户数据和本地运行产物不进入版本控制。
+当前公开版本为 v1.3.0。仓库包含可运行代码、公开基线测试和部署文档；真实密钥、用户数据、本地运行产物和内部评测资料不进入版本控制。
 
 ## V1 能力
 
@@ -32,6 +32,8 @@ CareerAgent 不会补写用户未提供的经历、职责、技能、证书、�
 | 能力加载 | Dynamic SkillManager，按 Intent 精确注入单个 Career Skill |
 | 知识检索 | RAG knowledge retrieval |
 | 可观测性 | `/monitor`、Prometheus、evaluation |
+| 回答可靠性 | 完整性检测、一次有界续写和质量状态返回 |
+| API 契约 | Request ID、结构化错误和安全的验证摘要 |
 | 部署 | Docker Compose |
 
 请求主链路：
@@ -47,12 +49,12 @@ POST /chat
   -> memory / profile / monitor / evaluation
 ```
 
-## v1.2.0 验证结果
+## v1.3.0 验证结果
 
 | 检查项 | 结果 |
 |---|---|
 | Python syntax / import | 通过 |
-| 确定性自动回归 | 45/45 |
+| 完整发布回归 | 62/62 |
 | 在线内置评测 | 16/16，通过率 1.0 |
 | Python 依赖审计 | 0 个已知漏洞 |
 | Docker Compose config | 通过 |
@@ -92,7 +94,7 @@ ENABLE_SWAGGER_UI=true
 
 ```bash
 docker compose ps
-docker compose logs -f echomind
+docker compose logs -f mako
 docker compose down
 ```
 
@@ -114,6 +116,12 @@ curl -X POST "http://localhost:8000/chat" \
 - `review_required`
 - `latency_ms`
 - `knowledge_used`
+- `request_id`
+- `response_complete`
+- `continuation_used`
+- `quality_flags`
+
+当模型输出因 token 上限或结构未闭合而可能中断时，Mako 最多执行一次有界续写。调用方可以根据完整性和质量字段决定是否重试或转入人工检查。
 
 ## 本地测试
 
@@ -134,17 +142,18 @@ skills/       动态业务规则
 mcp/          工具管理与知识库
 monitor/      运行监控
 evaluation/   意图与对话评测
-tests/        自动回归与安全边界测试
+tests/        公开基线回归与安全边界测试
 tools/        持久化备份和恢复验证工具
 ```
 
 ## 数据兼容性
 
-v1.2.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和持久化 volume 不变，不需要数据迁移。
+v1.3.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和持久化 volume 不变。Compose、服务、容器、网络和镜像使用 Mako 名称，四个既有 volume 名称继续显式保留，因此不需要数据迁移。
 
 ## 项目文档
 
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v1.3.0 Release Notes](RELEASE_NOTES_v1.3.0.md)
 - [Mako v1.2.0 Release Notes](RELEASE_NOTES_v1.2.0.md)
 - [Security Guide](SECURITY.md)
 

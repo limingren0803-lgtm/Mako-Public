@@ -4,19 +4,19 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    cluster: 'echomind'
+    cluster: 'mako'
     environment: 'production'
 
 rule_files:
   - "alerts/*.yml"
 
 scrape_configs:
-  # Mako 主应用指标（保留 echomind 监控标识以延续 V1 时序数据）
-  - job_name: 'echomind-app'
+  # Mako 主应用指标
+  - job_name: 'mako-app'
     static_configs:
-      - targets: ['echomind:8000']
+      - targets: ['mako:8000']
         labels:
-          service: 'echomind'
+          service: 'mako'
     scrape_interval: 10s
     metrics_path: '/metrics'
 

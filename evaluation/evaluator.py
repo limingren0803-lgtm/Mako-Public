@@ -1,18 +1,4 @@
-"""
-亮点：端到端 Agent 评测框架
-
-核心问题：如何评测端到端 Agent？
-
-评测维度：
-  1. 意图识别准确率 —— 预测意图 vs 标注意图，计算 Accuracy / F1
-  2. 响应质量评分 —— 用 LLM 作为评判者（LLM-as-Judge），
-     从相关性、准确性、完整性、有用性四个维度打分
-  3. 端到端对话评测 —— 模拟完整多轮对话，评估整体体验
-  4. 回归测试 —— 与历史基线对比，防止性能退化
-
-LLM-as-Judge 是评测 Agent 质量的关键技术：
-  人工标注成本高、主观性强；用 LLM 评判可以规模化、可重复。
-"""
+"""End-to-end intent, dialog quality, and regression evaluation."""
 import asyncio
 import json
 import logging
@@ -81,16 +67,7 @@ class EvalReport:
 # ── LLM-as-Judge ─────────────────────────────────────────────────────────────
 
 class LLMJudge:
-    """
-    用 LLM 评判 Agent 响应质量。
-
-    为什么用 LLM 而不是人工？
-    - 可规模化：数千条测试用例自动评测
-    - 可重复：相同输入得到稳定评分
-    - 多维度：同时评估相关性、准确性等多个维度
-
-    注意：LLM Judge 本身也有偏差，建议定期用人工标注校准。
-    """
+    """按相关性、准确性、完整性和有用性评估 Agent 回答。"""
 
     JUDGE_PROMPT = """你是一个 AI Agent 响应质量评估专家。请对以下系统响应进行评分。
 
@@ -346,7 +323,10 @@ class EndToEndEvaluator:
             actual_answer = orch_result.response
 
             scores = await self._judge.judge(question, actual_answer, context=context or None)
-            passed = scores.overall >= self.PASS_THRESHOLD
+            response_complete = bool(getattr(orch_result, "response_complete", True))
+            continuation_used = bool(getattr(orch_result, "continuation_used", False))
+            quality_flags = list(getattr(orch_result, "quality_flags", []))
+            passed = scores.overall >= self.PASS_THRESHOLD and response_complete
 
             history.append({"role": "user", "content": question})
             history.append({"role": "assistant", "content": actual_answer})
@@ -362,7 +342,10 @@ class EndToEndEvaluator:
                     "helpfulness": scores.helpfulness,
                     "overall": scores.overall,
                 },
-                detail=f"Q: {question[:30]}... → 综合评分 {scores.overall:.3f}",
+                detail=(
+                    f"Q: {question[:30]}... → 综合评分 {scores.overall:.3f}"
+                    + ("；回答完整" if response_complete else "；回答可能不完整")
+                ),
                 metadata={
                     "question": question,
                     "response": actual_answer,
@@ -372,6 +355,9 @@ class EndToEndEvaluator:
                     "conv_id": conv_id,
                     "judge_failed": scores.judge_failed,
                     "judge_error": scores.error,
+                    "response_complete": response_complete,
+                    "continuation_used": continuation_used,
+                    "quality_flags": quality_flags,
                 },
             ))
 

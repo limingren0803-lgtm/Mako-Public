@@ -1,20 +1,4 @@
-"""
-亮点：多 Agent 路由与编排
-
-核心问题：多 Agent 情况下如何做 Routing？
-
-路由策略（三层决策）：
-  1. 意图路由 —— 根据 IntentCategory 直接映射到专属 Agent
-  2. 性能路由 —— 同类 Agent 有多个时，选成功率最高、延迟最低的
-  3. 降级路由 —— 专属 Agent 不可用时，自动降级到 GeneralAgent
-
-并行协作：
-  - 复杂问题（如"技术问题 + 账单问题"）可同时派发给多个 Agent
-  - 结果由 Orchestrator 合并后返回
-
-升级机制：
-  - Agent 置信度不足或信息不完整 → 返回明确的限制说明或确认请求
-"""
+"""Agent routing, execution, response continuation, and result aggregation."""
 import asyncio
 import logging
 import time
@@ -26,11 +10,12 @@ from typing import Any, Dict, List, Optional
 from anthropic import AsyncAnthropic
 
 from core.intent_recognizer import IntentCategory, IntentRecognizer, TimeSensitivity
-from core.llm_utils import extract_text_content
+from core.llm_utils import TextCompletion, extract_text_content, inspect_text_completion, join_continuation
 
 logger = logging.getLogger(__name__)
 
 CAREER_MAX_TOKENS = 4096
+CONTINUATION_MAX_TOKENS = 2048
 
 
 # ── 数据结构 ──────────────────────────────────────────────────────────────────
@@ -72,6 +57,9 @@ class AgentResponse:
     confidence:  float = 1.0
     latency_ms:  float = 0.0
     needs_review: bool = False
+    response_complete: bool = True
+    continuation_used: bool = False
+    quality_flags: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -94,6 +82,9 @@ class OrchestratorResult:
     intent:      Optional[IntentCategory]
     review_required: bool = False
     latency_ms:  float = 0.0
+    response_complete: bool = True
+    continuation_used: bool = False
+    quality_flags: List[str] = field(default_factory=list)
 
 
 # ── 基础 Agent ────────────────────────────────────────────────────────────────
@@ -114,17 +105,20 @@ class BaseAgent:
         t0 = time.monotonic()
         self.stats.total += 1
         try:
-            content = await self._call_llm(req)
+            completion = await self._call_llm(req)
             ms = (time.monotonic() - t0) * 1000
             self.stats.success += 1
             self.stats.total_ms += ms
-            needs_review = self._needs_review(content)
+            needs_review = self._needs_review(completion.text)
             return AgentResponse(
                 agent_type=self.agent_type,
-                content=content,
+                content=completion.text,
                 success=True,
                 latency_ms=ms,
                 needs_review=needs_review,
+                response_complete=completion.complete,
+                continuation_used=completion.continuation_used,
+                quality_flags=list(completion.quality_flags),
             )
         except Exception as ex:
             ms = (time.monotonic() - t0) * 1000
@@ -137,7 +131,7 @@ class BaseAgent:
                 latency_ms=ms,
             )
 
-    async def _call_llm(self, req: Request) -> str:
+    async def _call_llm(self, req: Request) -> TextCompletion:
         def _clean(s: str) -> str:
             return s.encode("utf-8", errors="ignore").decode("utf-8")
 
@@ -155,7 +149,42 @@ class BaseAgent:
             system=self._build_system_prompt(req),
             messages=messages,
         )
-        return extract_text_content(resp.content)
+        initial_text = extract_text_content(resp.content)
+        initial = inspect_text_completion(initial_text, getattr(resp, "stop_reason", None))
+        if initial.complete:
+            return initial
+
+        continuation_messages = list(messages)
+        if initial_text:
+            continuation_messages.append({"role": "assistant", "content": initial_text})
+        continuation_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "上一段回答未完整结束。请只从中断处继续，补齐未完成的句子和必要栏目；"
+                    "不要重复已有内容，也不要新增未经用户确认的事实。"
+                ),
+            }
+        )
+        continued_resp = await self._client.messages.create(
+            model=self._model,
+            max_tokens=min(max_tokens, CONTINUATION_MAX_TOKENS),
+            system=self._build_system_prompt(req),
+            messages=continuation_messages,
+        )
+        continued_text = extract_text_content(continued_resp.content)
+        combined = join_continuation(initial_text, continued_text)
+        final = inspect_text_completion(combined, getattr(continued_resp, "stop_reason", None))
+        flags = list(final.quality_flags)
+        if not continued_text.strip():
+            flags.append("empty_continuation")
+        return TextCompletion(
+            text=combined,
+            stop_reason=final.stop_reason,
+            complete=not flags,
+            quality_flags=tuple(dict.fromkeys(flags)),
+            continuation_used=True,
+        )
 
     def _build_system_prompt(self, req: Request) -> str:
         """把动态加载的 Skills 拼入 system prompt，让业务规则随请求生效。"""
@@ -306,6 +335,9 @@ class AgentOrchestrator:
             intent=req.intent,
             review_required=review_required,
             latency_ms=(time.monotonic() - t0) * 1000,
+            response_complete=response.response_complete,
+            continuation_used=response.continuation_used,
+            quality_flags=list(response.quality_flags),
         )
 
     async def run_parallel(self, req: Request, agent_types: List[AgentType]) -> OrchestratorResult:
@@ -326,6 +358,8 @@ class AgentOrchestrator:
 
         combined = "\n\n".join(parts) if parts else "抱歉，所有 Agent 均处理失败。"
         review_required = any(isinstance(r, AgentResponse) and r.needs_review for r in responses)
+        successful = [r for r in responses if isinstance(r, AgentResponse) and r.success]
+        quality_flags = list(dict.fromkeys(flag for r in successful for flag in r.quality_flags))
 
         return OrchestratorResult(
             request_id=req.request_id,
@@ -334,6 +368,9 @@ class AgentOrchestrator:
             intent=req.intent,
             review_required=review_required,
             latency_ms=(time.monotonic() - t0) * 1000,
+            response_complete=bool(successful) and all(r.response_complete for r in successful),
+            continuation_used=any(r.continuation_used for r in successful),
+            quality_flags=quality_flags,
         )
 
     # ── 路由逻辑 ──────────────────────────────────────────────────────────────

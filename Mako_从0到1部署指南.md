@@ -34,7 +34,7 @@ docker compose version
 ### 1.2 进入项目目录
 
 ```bash
-cd /path/to/Mako-Public
+cd /path/to/Mako
 ```
 
 确认当前目录下能看到这些文件：
@@ -90,19 +90,13 @@ ANTHROPIC_MODEL=deepseek-v4-pro
 ANTHROPIC_API_KEY=你的真实_api_key
 ```
 
-Docker Compose 部署时，Redis 连接会由 `docker-compose.yml` 自动覆盖为容器内地址。请为 Redis 和管理接口分别生成随机密钥：
+Docker Compose 部署时，Redis 连接会由 `docker-compose.yml` 自动覆盖为容器内地址，通常不用手动改：
 
 ```env
-REDIS_PASSWORD=<your-redis-password>
-MAKO_ADMIN_API_KEY=<your-admin-key-at-least-32-characters>
+REDIS_PASSWORD=replace-with-a-strong-password
+MAKO_ADMIN_API_KEY=replace-with-a-random-value-of-at-least-32-characters
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
-```
-
-Swagger 默认关闭。本地需要接口文档时设置：
-
-```env
-ENABLE_SWAGGER_UI=true
 ```
 
 `.env` 内含密钥，应保留在本地，不进入 Git 或对外分享。
@@ -118,11 +112,11 @@ docker compose up -d --build
 第一次启动会构建镜像并下载依赖，耗时可能较长。该命令会启动：
 
 ```text
-echomind-app
-echomind-redis
-echomind-chromadb
-echomind-prometheus
-echomind-nginx
+mako-app
+mako-redis
+mako-chromadb
+mako-prometheus
+mako-nginx
 ```
 
 查看容器状态：
@@ -136,7 +130,7 @@ docker compose ps
 查看主应用日志：
 
 ```bash
-docker compose logs -f echomind
+docker compose logs -f mako
 ```
 
 看到类似 `Mako 已就绪` 的日志后，说明主服务初始化完成。
@@ -167,7 +161,7 @@ curl http://localhost/health
 
 ### 4.2 打开接口文档
 
-确认 `.env` 中的 `ENABLE_SWAGGER_UI=true` 后，浏览器访问：
+Swagger 默认关闭。需要在本地使用时，先在 `.env` 中设置 `ENABLE_SWAGGER_UI=true` 并重启主应用。
 
 浏览器访问：
 
@@ -181,7 +175,7 @@ http://localhost:8000/docs
 http://localhost/docs
 ```
 
-Swagger 页面中可以直接点击接口的 `Try it out` 测试服务。受保护接口还需要在请求头中提供 `X-Admin-Key`。
+Swagger 页面中可以直接点击接口的 `Try it out` 测试服务。
 
 ### 4.3 测试主对话接口
 
@@ -189,7 +183,7 @@ Swagger 页面中可以直接点击接口的 `Try it out` 测试服务。受保�
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "请根据我的背景分析求职优势和短板",
+    "message": "我的订单什么时候发货？",
     "user_id": "user_001",
     "conv_id": "session_001"
   }'
@@ -203,10 +197,16 @@ curl -X POST http://localhost:8000/chat \
   "response": "...",
   "intent": "...",
   "agent_type": "...",
-  "escalated": false,
-  "latency_ms": 1234.5
+  "review_required": false,
+  "latency_ms": 1234.5,
+  "request_id": "...",
+  "response_complete": true,
+  "continuation_used": false,
+  "quality_flags": []
 }
 ```
+
+如果回答可能因 token 上限或结构未闭合而中断，Mako 最多执行一次有界续写。完整性字段会说明最终回答是否仍需重试或人工检查。
 
 ### 4.4 查看知识库状态
 
@@ -242,7 +242,7 @@ curl -H "X-Admin-Key: <your-admin-key>" http://localhost:8000/knowledge/stats
 ### 4.6 测试知识库检索
 
 ```bash
-curl -X POST "http://localhost:8000/search?query=产品经理面试准备&top_k=3"
+curl -X POST "http://localhost:8000/search?query=退款多久到账&top_k=3"
 ```
 
 如果返回 `results`，说明 ChromaDB 检索链路可用。
@@ -278,7 +278,7 @@ docker compose logs -f
 只看主应用：
 
 ```bash
-docker compose logs -f echomind
+docker compose logs -f mako
 ```
 
 只看 ChromaDB：
@@ -302,7 +302,7 @@ docker compose restart
 只重启主应用：
 
 ```bash
-docker compose restart echomind
+docker compose restart mako
 ```
 
 ### 5.4 停止服务
@@ -324,7 +324,7 @@ docker compose up -d --build
 如果怀疑缓存导致镜像没有更新：
 
 ```bash
-docker compose build --no-cache echomind
+docker compose build --no-cache mako
 docker compose up -d
 ```
 
@@ -373,13 +373,17 @@ pip install -r requirements.txt
 源码启动时，本机访问 Redis 和 ChromaDB，推荐保持：
 
 ```env
-REDIS_URL=redis://:<your-redis-password>@localhost:6379/0
+REDIS_URL=redis://localhost:6379/0
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
 CHROMA_PERSIST_DIRECTORY=./data/chroma
 ```
 
-`<your-redis-password>` 与本地 `.env` 中的 `REDIS_PASSWORD` 保持一致。
+如果 Redis 设置了密码，使用：
+
+```env
+REDIS_URL=redis://:replace-with-a-strong-password@localhost:6379/0
+```
 
 ### 6.5 启动 API 服务
 
@@ -414,33 +418,34 @@ curl -H "X-Admin-Key: <your-admin-key>" http://localhost:8000/skills
 修改 `skills/` 下的 `SKILL.md` 后，可以热加载：
 
 ```bash
-curl -X POST http://localhost:8000/skills/reload \
-  -H "X-Admin-Key: <your-admin-key>"
+curl -X POST \
+  -H "X-Admin-Key: <your-admin-key>" \
+  http://localhost:8000/skills/reload
 ```
 
 默认已有示例：
 
 ```text
-skills/general_assistant/SKILL.md
-skills/technical_support/SKILL.md
 skills/career_profile/SKILL.md
 skills/career_match/SKILL.md
 skills/career_jd/SKILL.md
 skills/career_resume/SKILL.md
 skills/career_interview/SKILL.md
 skills/career_planning/SKILL.md
+skills/general_assistant/SKILL.md
+skills/technical_support/SKILL.md
 ```
 
 ## 8. 端口说明
 
 | 服务 | 容器名 | 宿主机端口 | 访问地址 |
 |------|--------|------------|----------|
-| Mako API | `echomind-app` | `8000` | `http://localhost:8000` |
-| Swagger | `echomind-app` | `8000` | `http://localhost:8000/docs` |
-| Nginx | `echomind-nginx` | `80` | `http://localhost` |
-| ChromaDB | `echomind-chromadb` | `8001` | `http://localhost:8001` |
-| Redis | `echomind-redis` | `6379` | 本地 Redis 客户端 |
-| Prometheus | `echomind-prometheus` | `9090` | `http://localhost:9090` |
+| Mako API | `mako-app` | `8000` | `http://localhost:8000` |
+| Swagger | `mako-app` | `8000` | `http://localhost:8000/docs` |
+| Nginx | `mako-nginx` | `80` | `http://localhost` |
+| ChromaDB | `mako-chromadb` | `8001` | `http://localhost:8001` |
+| Redis | `mako-redis` | `6379` | 本地 Redis 客户端 |
+| Prometheus | `mako-prometheus` | `9090` | `http://localhost:9090` |
 
 如果端口被占用，可以修改 `docker-compose.yml` 中左侧宿主机端口。例如：
 
@@ -480,7 +485,7 @@ ANTHROPIC_API_KEY=你的真实_api_key
 最后重启：
 
 ```bash
-docker compose restart echomind
+docker compose restart mako
 ```
 
 ### 9.2 API 返回 503 服务未就绪
@@ -488,7 +493,7 @@ docker compose restart echomind
 先看主应用日志：
 
 ```bash
-docker compose logs -f echomind
+docker compose logs -f mako
 ```
 
 再看依赖状态：
@@ -547,19 +552,19 @@ docker compose up -d
 Docker Compose 模式下，主应用使用容器内地址：
 
 ```env
-REDIS_URL=redis://:<your-redis-password>@redis:6379/0
+REDIS_URL=redis://:replace-with-a-strong-password@redis:6379/0
 ```
 
 源码本地启动时，应该使用本机地址：
 
 ```env
-REDIS_URL=redis://:<your-redis-password>@localhost:6379/0
+REDIS_URL=redis://:replace-with-a-strong-password@localhost:6379/0
 ```
 
 测试 Redis：
 
 ```bash
-docker compose exec redis redis-cli -a <your-redis-password> ping
+docker compose exec redis redis-cli -a replace-with-a-strong-password ping
 ```
 
 正常返回：
@@ -575,7 +580,7 @@ PONG
 如果网络中断，重新执行：
 
 ```bash
-docker compose build --no-cache echomind
+docker compose build --no-cache mako
 docker compose up -d
 ```
 
@@ -600,7 +605,7 @@ docker-compose up -d
 如果你已经安装好 Docker，并准备好了 API Key，可以只执行这一组命令：
 
 ```bash
-cd /path/to/Mako-Public
+cd /path/to/Mako
 cp .env.example .env
 ```
 
@@ -608,9 +613,6 @@ cp .env.example .env
 
 ```env
 ANTHROPIC_API_KEY=你的真实_api_key
-REDIS_PASSWORD=<your-redis-password>
-MAKO_ADMIN_API_KEY=<your-admin-key-at-least-32-characters>
-ENABLE_SWAGGER_UI=true
 ```
 
 启动：
@@ -625,7 +627,7 @@ docker compose up -d --build
 curl http://localhost:8000/health
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"请帮我做求职背景诊断","user_id":"demo_user","conv_id":"demo_session"}'
+  -d '{"message":"你好，我想查询订单","user_id":"demo_user","conv_id":"demo_session"}'
 ```
 
 浏览器打开：
