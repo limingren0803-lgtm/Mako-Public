@@ -1,7 +1,7 @@
-"""Create and validate Mako Redis/ChromaDB volume backups.
+"""Create and validate Mako persistent data volume backups.
 
 The restore check always uses newly created temporary Docker volumes. It never
-writes to the live V1 volumes.
+writes to the live Mako volumes.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ HELPER_IMAGE = "alpine:3.20"
 VOLUMES = {
     "redis": "echomind_redis-data",
     "chromadb": "echomind_chromadb-data",
+    "knowledge_registry": "mako_knowledge-registry-data",
 }
 TEMP_VOLUME_PREFIX = "mako-restore-check-"
 

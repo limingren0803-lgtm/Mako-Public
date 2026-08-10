@@ -13,9 +13,13 @@ ChromaDB 在这里的角色：
 """
 import hashlib
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import chromadb
+
+from mcp.knowledge_registry import KnowledgeRegistry
+from mcp.knowledge_source_catalog import OFFICIAL_CAREER_SOURCES_CN
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,7 @@ class KnowledgeBase:
         chroma_host: str = "localhost",
         chroma_port: int = 8000,
         chroma_path: str = "./data/chroma",
+        registry_path: Optional[str] = None,
     ):
         # 优先连接独立 ChromaDB 服务（服务端内置 embedding 模型，客户端无需下载）
         self._use_server = False
@@ -63,6 +68,13 @@ class KnowledgeBase:
             metadata={"description": "Mako RAG 知识库"},
         )
 
+        self._registry = KnowledgeRegistry(
+            registry_path
+            or os.getenv("MAKO_KNOWLEDGE_REGISTRY_PATH", "./data/knowledge/registry.sqlite3")
+        )
+        for source in OFFICIAL_CAREER_SOURCES_CN:
+            self._registry.ensure_source(**source)
+
         # 如果知识库为空，导入默认文档
         if self._collection.count() == 0:
             self._load_default_docs()
@@ -76,25 +88,262 @@ class KnowledgeBase:
         documents 格式: [{"title": "...", "content": "..."}, ...]
         长文档会自动切片（每片 500 字）。
         """
-        ids, docs, metas = [], [], []
+        from mcp.knowledge_sources import find_instruction_injection
 
+        prepared = []
         for doc in documents:
-            title   = doc.get("title", "")
-            content = doc.get("content", "")
-            chunks  = self._chunk_text(content, chunk_size=500)
+            title = doc.get("title", "").strip()
+            content = doc.get("content", "").strip()
+            if not title or not content:
+                continue
+            flags = find_instruction_injection(content)
+            if flags:
+                raise ValueError(
+                    "document failed instruction isolation checks: " + ",".join(flags)
+                )
+            prepared.append((doc, title, content))
 
-            for i, chunk in enumerate(chunks):
-                doc_id = hashlib.md5(f"{title}_{i}_{chunk[:50]}".encode()).hexdigest()
-                ids.append(doc_id)
-                docs.append(chunk)
-                metas.append({"title": title, "chunk_index": i, "total_chunks": len(chunks)})
+        added_chunks = 0
+        for doc, title, content in prepared:
+            stable_id = f"doc_manual_{hashlib.sha256(title.encode('utf-8')).hexdigest()[:16]}"
+            result = self.publish_document(
+                document_id=stable_id,
+                title=title,
+                content=content,
+                source_url=doc.get("source_url"),
+            )
+            added_chunks += int(result.get("added_chunks", 0))
+        if added_chunks:
+            logger.info("知识库导入 %s 个文档片段", added_chunks)
+        return added_chunks
 
-        if ids:
-            # ChromaDB 会自动生成 Embedding
-            self._collection.add(ids=ids, documents=docs, metadatas=metas)
-            logger.info(f"知识库导入 {len(ids)} 个文档片段")
+    def publish_document(
+        self,
+        *,
+        title: str,
+        content: str,
+        document_id: Optional[str] = None,
+        source_id: Optional[str] = None,
+        external_id: Optional[str] = None,
+        source_url: Optional[str] = None,
+        validation_notes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Stage and publish one validated document while retaining version history."""
+        title = title.strip()
+        content = content.strip()
+        if not title or not content:
+            raise ValueError("title and content are required")
+        from mcp.knowledge_sources import find_instruction_injection, validate_source_url
 
-        return len(ids)
+        injection_flags = find_instruction_injection(content)
+        if injection_flags:
+            raise ValueError(
+                "document failed instruction isolation checks: " + ",".join(injection_flags)
+            )
+        if source_id:
+            source = self._registry.get_source(source_id)
+            if not source:
+                raise ValueError("registered source does not exist")
+            source_url = source_url or source["source_url"]
+            validate_source_url(
+                source_url,
+                [source["official_domain"], *source.get("delegated_domains", [])],
+            )
+
+        document = self._registry.ensure_document(
+            title=title,
+            source_id=source_id,
+            external_id=external_id,
+            document_id=document_id,
+        )
+        document_id = document["document_id"]
+        previous_version_id = document.get("current_version_id")
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        version = self._registry.stage_version(
+            document_id=document_id,
+            content=content,
+            content_hash=content_hash,
+            source_url=source_url,
+            validation_notes=validation_notes,
+        )
+        version_id = version["version_id"]
+        if (
+            version.get("duplicate")
+            and version_id == previous_version_id
+            and document.get("status") == "active"
+        ):
+            return {
+                "document_id": document_id,
+                "version_id": version_id,
+                "changed": False,
+                "added_chunks": 0,
+            }
+
+        chunks = self._chunk_text(content, chunk_size=500)
+        ids = [f"{document_id}:{version_id}:{index}" for index in range(len(chunks))]
+        metadatas = [
+            {
+                "title": title,
+                "chunk_index": index,
+                "total_chunks": len(chunks),
+                "document_id": document_id,
+                "version_id": version_id,
+                "source_id": source_id or "manual",
+                "source_url": source_url or "",
+                "content_hash": content_hash,
+                "status": "active",
+            }
+            for index in range(len(chunks))
+        ]
+
+        activated = False
+        try:
+            if ids:
+                self._collection.upsert(ids=ids, documents=chunks, metadatas=metadatas)
+            self._registry.activate_version(document_id, version_id)
+            activated = True
+            if previous_version_id and previous_version_id != version_id:
+                self._delete_version_chunks(document_id, previous_version_id)
+        except Exception:
+            recovery_error: Optional[Exception] = None
+            try:
+                if activated and previous_version_id and previous_version_id != version_id:
+                    previous_version = self._registry.get_version(previous_version_id)
+                    if previous_version:
+                        previous_chunks = self._chunk_text(
+                            previous_version["content"], chunk_size=500
+                        )
+                        previous_ids = [
+                            f"{document_id}:{previous_version_id}:{index}"
+                            for index in range(len(previous_chunks))
+                        ]
+                        previous_metadatas = [
+                            {
+                                "title": document["title"],
+                                "chunk_index": index,
+                                "total_chunks": len(previous_chunks),
+                                "document_id": document_id,
+                                "version_id": previous_version_id,
+                                "source_id": document.get("source_id") or "manual",
+                                "source_url": previous_version.get("source_url") or "",
+                                "content_hash": previous_version["content_hash"],
+                                "status": "active",
+                            }
+                            for index in range(len(previous_chunks))
+                        ]
+                        if previous_ids:
+                            self._collection.upsert(
+                                ids=previous_ids,
+                                documents=previous_chunks,
+                                metadatas=previous_metadatas,
+                            )
+                        self._registry.activate_version(document_id, previous_version_id)
+            except Exception as exc:
+                recovery_error = exc
+            if ids:
+                try:
+                    self._collection.delete(ids=ids)
+                except Exception:
+                    pass
+            self._registry.record_event(
+                "version_publish",
+                "document",
+                document_id,
+                "failed",
+                {"version_id": version_id},
+            )
+            if recovery_error:
+                raise RuntimeError("knowledge version recovery failed") from recovery_error
+            raise
+
+        return {
+            "document_id": document_id,
+            "version_id": version_id,
+            "changed": True,
+            "added_chunks": len(ids),
+        }
+
+    def list_documents(
+        self,
+        source_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.list_documents(source_id=source_id, status=status)
+
+    def get_document(self, document_id: str) -> Optional[Dict[str, Any]]:
+        return self._registry.get_document(document_id)
+
+    def list_versions(self, document_id: str) -> List[Dict[str, Any]]:
+        return self._registry.list_versions(document_id)
+
+    def deactivate_document(self, document_id: str, status: str = "inactive") -> Dict[str, Any]:
+        document = self._registry.get_document(document_id)
+        if not document:
+            raise KeyError(document_id)
+        version_id = document.get("current_version_id")
+        if version_id:
+            self._delete_version_chunks(document_id, version_id)
+        return self._registry.set_document_status(document_id, status)
+
+    def rollback_document(self, document_id: str, version_id: str) -> Dict[str, Any]:
+        document = self._registry.get_document(document_id)
+        version = self._registry.get_version(version_id)
+        if not document or not version or version.get("document_id") != document_id:
+            raise KeyError(version_id)
+        previous_version_id = document.get("current_version_id")
+        result = self.publish_document(
+            document_id=document_id,
+            title=document["title"],
+            content=version["content"],
+            source_id=document.get("source_id"),
+            external_id=document.get("external_id"),
+            source_url=version.get("source_url"),
+            validation_notes=["rollback"],
+        )
+        if previous_version_id and previous_version_id != result["version_id"]:
+            self._delete_version_chunks(document_id, previous_version_id)
+        return self._registry.get_document(document_id) or {}
+
+    def register_source(self, **kwargs: Any) -> Dict[str, Any]:
+        from mcp.knowledge_sources import validate_source_url
+
+        allowed_domains = [kwargs["official_domain"], *kwargs.get("delegated_domains", [])]
+        validate_source_url(
+            kwargs["source_url"],
+            allowed_domains,
+        )
+        if kwargs.get("policy_url"):
+            validate_source_url(kwargs["policy_url"], allowed_domains)
+        return self._registry.register_source(**kwargs)
+
+    def list_sources(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self._registry.list_sources(status=status)
+
+    def get_source(self, source_id: str) -> Optional[Dict[str, Any]]:
+        return self._registry.get_source(source_id)
+
+    def set_source_status(self, source_id: str, status: str) -> Dict[str, Any]:
+        return self._registry.set_source_status(source_id, status)
+
+    def set_source_policy(self, source_id: str, **kwargs: Any) -> Dict[str, Any]:
+        return self._registry.set_source_policy(source_id, **kwargs)
+
+    def record_event(
+        self,
+        action: str,
+        target_type: str,
+        target_id: str,
+        outcome: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self._registry.record_event(action, target_type, target_id, outcome, details)
+
+    def list_events(
+        self,
+        target_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.list_events(target_id=target_id, limit=limit)
 
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -119,6 +368,10 @@ class KnowledgeBase:
                     "content":  doc,
                     "score":    round(1.0 - dist, 4),  # ChromaDB 返回距离，转为相似度
                     "chunk":    meta.get("chunk_index", 0),
+                    "document_id": meta.get("document_id"),
+                    "version_id": meta.get("version_id"),
+                    "source_id": meta.get("source_id"),
+                    "source_url": meta.get("source_url"),
                 })
 
         return items
@@ -169,6 +422,15 @@ class KnowledgeBase:
             chunks.append(current)
 
         return chunks
+
+    def _delete_version_chunks(self, document_id: str, version_id: str) -> None:
+        version = self._registry.get_version(version_id)
+        if not version:
+            return
+        chunk_count = len(self._chunk_text(version["content"], chunk_size=500))
+        ids = [f"{document_id}:{version_id}:{index}" for index in range(chunk_count)]
+        if ids:
+            self._collection.delete(ids=ids)
 
     def _load_default_docs(self) -> None:
         """导入默认知识库文档（职业求职场景）。"""
