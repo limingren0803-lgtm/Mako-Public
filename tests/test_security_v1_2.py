@@ -91,6 +91,13 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertNotIn("message=%r", source)
         self.assertNotIn("查询改写: {query!r}", source)
 
+    def test_chromadb_telemetry_is_disabled_for_server_and_client(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+        requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+        self.assertEqual(2, compose.count("ANONYMIZED_TELEMETRY=FALSE"))
+        self.assertIn("posthog==5.4.0", requirements)
+
 
 class UploadBoundaryTests(unittest.TestCase):
     def setUp(self):

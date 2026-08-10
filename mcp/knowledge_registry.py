@@ -96,6 +96,37 @@ class KnowledgeRegistry:
                     details TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS job_postings (
+                    job_id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    company_name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    current_version_id TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    FOREIGN KEY(source_id) REFERENCES sources(source_id),
+                    UNIQUE(source_id, external_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_job_postings_source_status
+                    ON job_postings(source_id, status);
+                CREATE TABLE IF NOT EXISTS job_versions (
+                    job_version_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    version_number INTEGER NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    job_source_url TEXT,
+                    fetched_at TEXT NOT NULL,
+                    published_at TEXT,
+                    validation_status TEXT NOT NULL DEFAULT 'active',
+                    FOREIGN KEY(job_id) REFERENCES job_postings(job_id),
+                    UNIQUE(job_id, version_number),
+                    UNIQUE(job_id, content_hash)
+                );
                 """
             )
             source_columns = {
@@ -107,6 +138,8 @@ class KnowledgeRegistry:
                 )
             if "policy_url" not in source_columns:
                 connection.execute("ALTER TABLE sources ADD COLUMN policy_url TEXT")
+            if "job_source_url" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN job_source_url TEXT")
 
     def register_source(
         self,
@@ -114,6 +147,7 @@ class KnowledgeRegistry:
         company_name: str,
         official_domain: str,
         source_url: str,
+        job_source_url: Optional[str] = None,
         delegated_domains: Optional[List[str]] = None,
         source_type: str = "company_careers",
         refresh_policy: str = "manual",
@@ -128,17 +162,18 @@ class KnowledgeRegistry:
             connection.execute(
                 """
                 INSERT INTO sources (
-                    source_id, company_name, official_domain, source_url,
+                    source_id, company_name, official_domain, source_url, job_source_url,
                     delegated_domains, source_type, refresh_policy,
                     automation_allowed, policy_url, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
                 """,
                 (
                     source_id,
                     company_name,
                     official_domain,
                     source_url,
+                    job_source_url,
                     json.dumps(delegated, ensure_ascii=False),
                     source_type,
                     refresh_policy,
@@ -158,6 +193,14 @@ class KnowledgeRegistry:
             raise ValueError("catalog sources require a stable source_id")
         existing = self.get_source(source_id)
         if existing:
+            job_source_url = kwargs.get("job_source_url")
+            if job_source_url and not existing.get("job_source_url"):
+                with self._lock, self._connection() as connection:
+                    connection.execute(
+                        "UPDATE sources SET job_source_url = ?, updated_at = ? WHERE source_id = ?",
+                        (job_source_url, _utc_now(), source_id),
+                    )
+                return self.get_source(source_id) or existing
             return existing
         try:
             return self.register_source(**kwargs)
@@ -431,6 +474,274 @@ class KnowledgeRegistry:
                 raise KeyError(document_id)
         self.record_event("document_status_changed", "document", document_id, "success", {"status": status})
         return self.get_document(document_id) or {}
+
+    def upsert_job_posting(self, posting: Any) -> Dict[str, Any]:
+        """Insert a normalized posting or activate a new content version."""
+        from core.job_posting import JobPosting
+        from mcp.knowledge_sources import SourceSecurityError, validate_source_url
+
+        if not isinstance(posting, JobPosting):
+            posting = JobPosting.model_validate(posting)
+        content_hash = posting.content_hash()
+        payload = posting.model_dump_json()
+        fetched_at = posting.fetched_at.isoformat()
+        published_at = posting.published_at.isoformat() if posting.published_at else None
+        expires_at = posting.valid_through.isoformat() if posting.valid_through else None
+
+        with self._lock, self._connection() as connection:
+            source = connection.execute(
+                "SELECT * FROM sources WHERE source_id = ? AND status = 'active'",
+                (posting.source_id,),
+            ).fetchone()
+            if not source:
+                raise KeyError(posting.source_id)
+            allowed_domains = [
+                source["official_domain"],
+                *json.loads(source["delegated_domains"] or "[]"),
+            ]
+            validate_source_url(posting.source_url, allowed_domains)
+            if posting.company_name != source["company_name"]:
+                raise SourceSecurityError("job company does not match the registered source")
+
+            job = connection.execute(
+                "SELECT * FROM job_postings WHERE source_id = ? AND external_id = ?",
+                (posting.source_id, posting.external_id),
+            ).fetchone()
+            if job:
+                job_id = job["job_id"]
+            else:
+                job_id = f"job_{uuid.uuid4().hex[:16]}"
+                connection.execute(
+                    """
+                    INSERT INTO job_postings (
+                        job_id, source_id, external_id, company_name, title,
+                        status, first_seen_at, last_seen_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        posting.source_id,
+                        posting.external_id,
+                        posting.company_name,
+                        posting.title,
+                        posting.status.value,
+                        fetched_at,
+                        fetched_at,
+                        expires_at,
+                    ),
+                )
+
+            duplicate = connection.execute(
+                "SELECT job_version_id FROM job_versions WHERE job_id = ? AND content_hash = ?",
+                (job_id, content_hash),
+            ).fetchone()
+            if duplicate:
+                connection.execute(
+                    """
+                    UPDATE job_postings
+                    SET company_name = ?, title = ?, status = ?, last_seen_at = ?, expires_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (
+                        posting.company_name,
+                        posting.title,
+                        posting.status.value,
+                        fetched_at,
+                        expires_at,
+                        job_id,
+                    ),
+                )
+                changed = False
+                version_id = duplicate["job_version_id"]
+            else:
+                version_number = connection.execute(
+                    "SELECT COALESCE(MAX(version_number), 0) + 1 FROM job_versions WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()[0]
+                version_id = f"jobver_{uuid.uuid4().hex[:16]}"
+                connection.execute(
+                    """
+                    UPDATE job_versions
+                    SET validation_status = 'superseded'
+                    WHERE job_id = ? AND validation_status = 'active'
+                    """,
+                    (job_id,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO job_versions (
+                        job_version_id, job_id, version_number, content_hash,
+                        payload, source_url, fetched_at, published_at, validation_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                    """,
+                    (
+                        version_id,
+                        job_id,
+                        version_number,
+                        content_hash,
+                        payload,
+                        posting.source_url,
+                        fetched_at,
+                        published_at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE job_postings
+                    SET company_name = ?, title = ?, status = ?, current_version_id = ?,
+                        last_seen_at = ?, expires_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (
+                        posting.company_name,
+                        posting.title,
+                        posting.status.value,
+                        version_id,
+                        fetched_at,
+                        expires_at,
+                        job_id,
+                    ),
+                )
+                changed = True
+
+        self.record_event(
+            "job_version_activated" if changed else "job_seen_unchanged",
+            "job_posting",
+            job_id,
+            "success",
+            {"job_version_id": version_id, "source_id": posting.source_id},
+        )
+        result = self.get_job_posting(job_id) or {}
+        result["changed"] = changed
+        return result
+
+    def get_job_posting(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT j.*, v.version_number, v.content_hash, v.payload,
+                       v.source_url, v.fetched_at, v.published_at
+                FROM job_postings j
+                LEFT JOIN job_versions v ON v.job_version_id = j.current_version_id
+                WHERE j.job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["payload"] = json.loads(result["payload"]) if result.get("payload") else None
+        return result
+
+    def list_job_postings(
+        self,
+        *,
+        source_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        limit = min(max(limit, 1), 500)
+        clauses: List[str] = []
+        params: List[Any] = []
+        if source_id:
+            clauses.append("j.source_id = ?")
+            params.append(source_id)
+        if status:
+            clauses.append("j.status = ?")
+            params.append(status)
+        query = """
+            SELECT j.*, v.version_number, v.content_hash, v.payload,
+                   v.source_url, v.fetched_at, v.published_at
+            FROM job_postings j
+            LEFT JOIN job_versions v ON v.job_version_id = j.current_version_id
+        """
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY j.last_seen_at DESC, j.job_id LIMIT ?"
+        params.append(limit)
+        with self._connection() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        results: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item["payload"]) if item.get("payload") else None
+            results.append(item)
+        return results
+
+    def reconcile_job_snapshot(
+        self,
+        *,
+        source_id: str,
+        observed_external_ids: List[str],
+        complete_snapshot: bool,
+    ) -> int:
+        """Deactivate missing jobs only when the caller confirms a complete snapshot."""
+        if not complete_snapshot:
+            raise ValueError("job deactivation requires a complete source snapshot")
+        observed = sorted(set(observed_external_ids))
+        with self._lock, self._connection() as connection:
+            source = connection.execute(
+                "SELECT source_id FROM sources WHERE source_id = ?",
+                (source_id,),
+            ).fetchone()
+            if not source:
+                raise KeyError(source_id)
+            if observed:
+                placeholders = ",".join("?" for _ in observed)
+                cursor = connection.execute(
+                    f"""
+                    UPDATE job_postings SET status = 'inactive'
+                    WHERE source_id = ? AND status = 'active'
+                      AND external_id NOT IN ({placeholders})
+                    """,
+                    (source_id, *observed),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE job_postings SET status = 'inactive'
+                    WHERE source_id = ? AND status = 'active'
+                    """,
+                    (source_id,),
+                )
+            count = cursor.rowcount
+        self.record_event(
+            "job_snapshot_reconciled",
+            "source",
+            source_id,
+            "success",
+            {"observed_count": len(observed), "deactivated_count": count},
+        )
+        return count
+
+    def search_job_postings(self, query: str, *, limit: int = 5) -> List[Dict[str, Any]]:
+        """Search active local postings without refreshing any external source."""
+        from core.job_search import rank_job_postings
+
+        candidates = self.list_job_postings(status="active", limit=500)
+        return rank_job_postings(query, candidates, limit=limit)
+
+    def expire_job_postings(self, *, as_of: Optional[str] = None) -> int:
+        """Mark active postings expired when their declared validity has ended."""
+        as_of = as_of or _utc_now()
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE job_postings SET status = 'expired'
+                WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?
+                """,
+                (as_of,),
+            )
+            count = cursor.rowcount
+        if count:
+            self.record_event(
+                "jobs_expired",
+                "job_posting",
+                "batch",
+                "success",
+                {"as_of": as_of, "expired_count": count},
+            )
+        return count
 
     def record_event(
         self,

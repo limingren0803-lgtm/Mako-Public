@@ -49,6 +49,7 @@ OFFICIAL_CAREER_SOURCES_CN: Tuple[Dict[str, Any], ...] = (
         "company_name": "百度",
         "official_domain": "talent.baidu.com",
         "source_url": "https://talent.baidu.com/jobs/social",
+        "job_source_url": "https://talent.baidu.com/jobs/list?projectType=1",
         "source_type": "company_careers",
         "refresh_policy": "disabled",
         "automation_allowed": False,

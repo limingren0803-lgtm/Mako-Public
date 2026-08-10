@@ -312,6 +312,8 @@ class KnowledgeBase:
             kwargs["source_url"],
             allowed_domains,
         )
+        if kwargs.get("job_source_url"):
+            validate_source_url(kwargs["job_source_url"], allowed_domains)
         if kwargs.get("policy_url"):
             validate_source_url(kwargs["policy_url"], allowed_domains)
         return self._registry.register_source(**kwargs)
@@ -344,6 +346,27 @@ class KnowledgeBase:
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         return self._registry.list_events(target_id=target_id, limit=limit)
+
+    def list_job_postings(
+        self,
+        *,
+        source_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.list_job_postings(
+            source_id=source_id,
+            status=status,
+            limit=limit,
+        )
+
+    async def refresh_job_source(self, source_id: str) -> Dict[str, Any]:
+        from mcp.job_pipeline import refresh_job_source
+
+        return await refresh_job_source(registry=self._registry, source_id=source_id)
+
+    def search_job_postings(self, query: str, *, limit: int = 5) -> List[Dict[str, Any]]:
+        return self._registry.search_job_postings(query, limit=limit)
 
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """

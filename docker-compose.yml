@@ -87,6 +87,7 @@ services:
       - MAKO_KNOWLEDGE_REGISTRY_PATH=/app/data/knowledge/registry.sqlite3
       - EVAL_BASELINE_PATH=/app/data/eval/baseline.json
       - MAKO_SKILLS_DIR=/app/skills
+      - ANONYMIZED_TELEMETRY=FALSE
     volumes:
       - ./data/chroma:/app/data/chroma
       - ./data/eval:/app/data/eval

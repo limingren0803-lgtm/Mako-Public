@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from anthropic import AsyncAnthropic
 
-from core.intent_recognizer import IntentCategory, IntentRecognizer, TimeSensitivity
+from core.intent_recognizer import IntentCategory, IntentRecognizer, IntentResult, TimeSensitivity
 from core.llm_utils import TextCompletion, extract_text_content, inspect_text_completion, join_continuation
 
 logger = logging.getLogger(__name__)
@@ -305,6 +305,14 @@ class AgentOrchestrator:
         for agents in self._pool.values():
             for agent in agents:
                 agent._skill_manager = skill_manager
+
+    async def recognize_intent(
+        self,
+        message: str,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> IntentResult:
+        """Expose the shared recognizer so callers can prepare intent-scoped context once."""
+        return await self._intent_recognizer.recognize(message, history=history)
 
     # ── 主入口 ────────────────────────────────────────────────────────────────
 

@@ -1,31 +1,45 @@
-# Mako v1.4.0 Release Notes
+# Mako v1.4.0 发布说明
 
-Release date: 2026-08-10
+发布日期：2026-08-10
 
-## Overview
+## 版本概览
 
-Mako v1.4.0 adds lifecycle management for career knowledge while preserving the existing Career Skills, CareerProfile behavior, Memory behavior, and API paths.
+Mako v1.4.0 增加职业知识生命周期管理。六个 Career Skills、CareerProfile Schema、Memory 行为和现有 API 路径保持不变。
 
-## Knowledge lifecycle
+## 受管职业知识
 
-- A SQLite registry records official sources, documents, versions, and lifecycle events.
-- Stable document identifiers and content hashes prevent unchanged material from creating duplicate versions.
-- Updates, status changes, and rollbacks keep registry metadata and ChromaDB retrieval data aligned.
-- Successful changes clear related knowledge-search cache entries.
-- Version and audit responses expose metadata without returning stored document text.
+- 官方来源、文档、版本和生命周期事件记录在 SQLite 登记库中；
+- 文档使用稳定标识符和 SHA-256 内容哈希，内容未变化时沿用现有版本；
+- 更新、停用或回滚文档时，登记状态与 ChromaDB 检索数据保持一致；
+- 写入、状态变更或回滚成功后清理知识检索缓存；
+- 版本历史和审计接口只返回元数据，不暴露已存储的文档正文或凭据。
 
-## Official recruitment sources
+## 官方来源控制
 
-The initial catalog contains the official recruitment domains for Tencent, Huawei, ByteDance, Meituan, and Baidu. It does not include social platforms, recruitment aggregators, forums, or unverified sources.
+- 来源获取仅限已登记的 HTTPS 域名和获准的委托域名；
+- 内容发布前检查 DNS 结果、实际连接地址、跳转目标、robots 规则、响应类型和响应大小；
+- 包含疑似指令注入模式的外部文档在建立索引前会被拒绝；
+- 自动获取默认关闭，仅能通过已认证的管理边界并提供策略引用后启用；
+- 首批来源目录包含腾讯、华为、字节跳动、美团和百度，注册目录不会在应用启动时获取网站内容。
 
-Catalog registration does not fetch website content. Automated retrieval remains disabled until an administrator reviews the source policy. Retrieval checks HTTPS and registered domains, DNS and peer addresses, redirects, robots policies, content type, response size, and common instruction-injection patterns.
+## Agent 边界
 
-## Retrieval boundary
+检索到的知识作为不受信任的事实背景提供，不能改变 Agent 身份、系统规则、工具权限或输出要求。信息缺失、冲突或可能过时时，系统会说明相应状态，不将其作为权威指令处理。
 
-External knowledge is supplied to the Agent as untrusted factual context. It cannot change Agent identity, system rules, tool permissions, or output requirements. Material that is missing, conflicting, or potentially outdated is not treated as an instruction.
+## 持久化与兼容性
 
-## Persistence and compatibility
+- 知识登记库使用 `mako_knowledge-registry-data` Docker volume，并纳入持久化备份；
+- 现有 Redis keys、ChromaDB collections、CareerProfile 字段、API 路由和数据路径保持不变；
+- Redis、ChromaDB、Prometheus 和 Nginx 的现有 volume 名称继续固定，使当前安装保留原有数据；
+- ChromaDB 版本替换失败时，在报告更新失败前恢复此前的活动版本。
 
-- The knowledge registry uses the `mako_knowledge-registry-data` Docker volume and is included in persistence backups.
-- Existing Redis keys, ChromaDB collections, CareerProfile fields, API routes, and data paths remain unchanged.
-- Existing Redis, ChromaDB, Prometheus, and Nginx volume names remain pinned for upgrade compatibility.
+## 验证结果
+
+- Python syntax 和 import 检查通过；
+- v1.4 生命周期及来源边界专项测试 23/23 通过；
+- 完整确定性回归测试 85/85 通过；
+- Docker Compose 配置校验通过；
+- 五个 Mako 服务均完成重建并达到 healthy 状态；
+- 在线健康检查、受保护的来源列表、来源禁用策略、登记库持久化和重启恢复检查通过；
+- 最近的应用日志未发现严重启动错误；
+- GitHub Actions CI #14（run `31357272482`）通过。

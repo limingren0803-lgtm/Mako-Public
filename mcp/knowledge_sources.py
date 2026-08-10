@@ -38,6 +38,7 @@ class FetchedSource:
     title: str
     text: str
     content_hash: str
+    raw_content: str = ""
 
 
 class _TextExtractor(HTMLParser):
@@ -261,4 +262,5 @@ async def fetch_registered_source(source: dict) -> FetchedSource:
             title=title,
             text=text,
             content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            raw_content=final_body.decode("utf-8"),
         )
