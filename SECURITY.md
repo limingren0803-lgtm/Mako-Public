@@ -1,6 +1,6 @@
 # Mako Security Guide
 
-This guide describes the security boundary introduced in Mako v1.2.0 and the compatible runtime naming changes prepared for v1.3.0. It does not replace authentication at an application or identity-provider layer.
+This guide covers the management-key and network controls available in Mako v1.3.0. It does not replace authentication at an application or identity-provider layer.
 
 ## Management API key
 

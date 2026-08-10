@@ -1,6 +1,6 @@
 # Mako Skills 文档
 
-Mako 启动时从 `MAKO_SKILLS_DIR` 读取 Skills，并在匹配用户请求时注入到对应 Agent 的 system prompt。现有部署仍可使用 `ECHOMIND_SKILLS_DIR` 作为兼容配置。Skills 用于封装不同 Agent 的任务规范、处理边界、输出要求与领域知识。
+Mako 启动时从 `MAKO_SKILLS_DIR` 读取 Skills，并在匹配用户请求时注入到对应 Agent 的 system prompt。已有部署使用的旧配置别名仍然有效。Skills 用于封装不同 Agent 的任务规范、处理边界、输出要求与领域知识。
 
 当前内置三类 Skills：
 

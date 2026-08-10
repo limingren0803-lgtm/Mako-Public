@@ -4,7 +4,7 @@ Release date: 2026-08-10
 
 ## Scope
 
-Mako v1.3.0 improves response reliability, API consistency, and runtime naming. The six Career Skills, CareerProfile Schema, Memory behavior, and existing API paths are unchanged.
+Mako v1.3.0 improves response reliability, API consistency, and deployment behavior. The six Career Skills, CareerProfile Schema, Memory behavior, and existing API paths are unchanged.
 
 ## Response reliability
 
@@ -19,11 +19,11 @@ Mako v1.3.0 improves response reliability, API consistency, and runtime naming. 
 - API errors use a consistent `error.code`, `error.message`, and `error.request_id` envelope.
 - Validation errors identify the affected field without echoing the rejected input value.
 
-## Mako runtime names
+## Runtime and deployment
 
 - `MAKO_SKILLS_DIR` and `MAKO_SKILLS_MAX_PROMPT_CHARS` are the primary Skill settings.
-- Existing `ECHOMIND_SKILLS_*` settings remain accepted as a compatibility fallback.
-- The Compose project, application service, containers, network, image, Nginx upstream, Prometheus labels, and non-root image user now use Mako names.
+- Legacy Skill environment aliases remain accepted for existing deployments.
+- Compose resources, Nginx upstreams, Prometheus labels, and the non-root image user follow a consistent naming scheme.
 - The four existing Docker volume names remain explicit so upgrades reuse Redis, ChromaDB, Prometheus, and Nginx data. New installations create the same named volumes automatically.
 
 ## Verification

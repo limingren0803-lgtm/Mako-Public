@@ -4,7 +4,7 @@ AI Career Intelligence System
 
 Mako 是一个面向求职场景的多 Agent 系统。它把用户的职业背景、目标岗位和历史对话组织成可复用的 CareerProfile，并针对岗位匹配、JD 分析、简历、面试和求职规划等任务选择对应能力。
 
-当前公开版本为 v1.3.0。仓库包含可运行代码、公开基线测试和部署文档；真实密钥、用户数据、本地运行产物和内部评测资料不进入版本控制。
+当前版本为 v1.3.0。仓库包含可运行代码、公开基线测试和部署文档。
 
 ## V1 能力
 
@@ -148,7 +148,7 @@ tools/        持久化备份和恢复验证工具
 
 ## 数据兼容性
 
-v1.3.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和持久化 volume 不变。Compose、服务、容器、网络和镜像使用 Mako 名称，四个既有 volume 名称继续显式保留，因此不需要数据迁移。
+v1.3.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和持久化 volume 不变。四个持久化 volume 沿用既有名称，升级不需要数据迁移。
 
 ## 项目文档
 
@@ -159,8 +159,5 @@ v1.3.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile
 
 ## 安全边界
 
-- `.env`、本地运行数据、日志、PDF、ZIP 和备份文件不进入公开提交。
-- 不提交真实用户简历、CareerProfile 或 ChromaDB 数据。
-- API Key 如果曾进入 Git 历史，应立即在服务商后台撤销并更换。
 - 管理、调试、知识库管理和评测接口使用独立的 `X-Admin-Key`。
 - 应用、Redis、ChromaDB 和 Prometheus 的直连端口默认仅绑定本机。
