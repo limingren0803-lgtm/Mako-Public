@@ -71,6 +71,21 @@ class SecurityConfigurationTests(unittest.TestCase):
             api_main.ChatRequest(message="hello", job_max_age_days=0)
         with self.assertRaises(ValidationError):
             api_main.ChatRequest(message="hello", job_max_age_days=91)
+        request = api_main.ChatRequest(
+            message="hello",
+            job_source_ids=["src_cn_tencent", "src_cn_tencent"],
+            job_data_mode="official_links_if_missing",
+        )
+        self.assertEqual(["src_cn_tencent"], request.job_source_ids)
+        with self.assertRaises(ValidationError):
+            api_main.ChatRequest(message="hello", job_source_ids=["../private"])
+        with self.assertRaises(ValidationError):
+            api_main.ChatRequest(
+                message="hello",
+                job_source_ids=[f"src_{index}" for index in range(6)],
+            )
+        with self.assertRaises(ValidationError):
+            api_main.ChatRequest(message="hello", job_data_mode="live_refresh")
 
     def test_sensitive_routes_have_admin_dependency(self):
         protected = {

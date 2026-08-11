@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v1.7.0             ║
+   ║           Mako  v1.8.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -210,7 +210,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="1.7.0",
+    version="1.8.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -317,6 +317,11 @@ class ChatRequest(BaseModel):
     user_id:     str = Field(default="anonymous", max_length=128)
     conv_id:     Optional[str] = Field(default=None, max_length=128)
     job_max_age_days: int = Field(default=30, ge=1, le=90)
+    job_source_ids: List[str] = Field(default_factory=list, max_length=5)
+    job_data_mode: str = Field(
+        default="verified_only",
+        pattern="^(verified_only|official_links_if_missing)$",
+    )
 
     @field_validator("user_id")
     @classmethod
@@ -327,6 +332,33 @@ class ChatRequest(BaseModel):
     @classmethod
     def validate_conv_id(cls, value: Optional[str]) -> Optional[str]:
         return validate_identifier(value, "conv_id") if value is not None else None
+
+    @field_validator("job_source_ids")
+    @classmethod
+    def validate_job_source_ids(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for value in values:
+            source_id = value.strip()
+            if not source_id or len(source_id) > 128 or not all(
+                char.isascii() and (char.isalnum() or char in "_-")
+                for char in source_id
+            ):
+                raise ValueError("invalid job source identifier")
+            if source_id not in normalized:
+                normalized.append(source_id)
+        return normalized
+
+
+class JobSourceOption(BaseModel):
+    source_id: str
+    company_name: str
+    official_url: str
+    support_level: str
+    verified_at: Optional[str] = None
+    data_status: str = "official_link_only"
+    available_actions: List[str] = Field(default_factory=lambda: ["official_link"])
+    verified_job_count: int = 0
+    last_job_verified_at: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -341,6 +373,9 @@ class ChatResponse(BaseModel):
     job_data_used: bool = False
     job_sources: List[str] = Field(default_factory=list)
     job_max_age_days: int = 30
+    job_source_ids: List[str] = Field(default_factory=list)
+    job_data_mode: str = "verified_only"
+    job_source_options: List[JobSourceOption] = Field(default_factory=list)
     response_complete: bool = True
     continuation_used: bool = False
     quality_flags: List[str] = Field(default_factory=list)
@@ -386,6 +421,13 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
     from memory.conversation_memory import MsgRole
 
     conv_id = req.conv_id or str(uuid.uuid4())
+    try:
+        job_source_options = _resolve_job_source_options(
+            req.job_source_ids,
+            max_age_days=req.job_max_age_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, "one or more job sources are unavailable") from exc
 
     # 1. 读取记忆上下文
     mem_ctx = await _memory.get_context(req.user_id, conv_id, query=req.message)
@@ -405,6 +447,9 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         req.message,
         intent=intent_result.intent,
         max_age_days=req.job_max_age_days,
+        source_ids=req.job_source_ids,
+        data_mode=req.job_data_mode,
+        source_options=job_source_options,
     )
     context_parts = [mem_ctx.to_prompt_text()]
     if knowledge_text:
@@ -449,6 +494,9 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         job_data_used=job_data_used,
         job_sources=job_sources,
         job_max_age_days=req.job_max_age_days,
+        job_source_ids=req.job_source_ids,
+        job_data_mode=req.job_data_mode,
+        job_source_options=job_source_options,
         response_complete=result.response_complete,
         continuation_used=result.continuation_used,
         quality_flags=result.quality_flags,
@@ -521,18 +569,46 @@ def _build_job_context(
     intent: Any = None,
     limit: int = 5,
     max_age_days: int = 30,
+    source_ids: Optional[List[str]] = None,
+    data_mode: str = "verified_only",
+    source_options: Optional[List[JobSourceOption]] = None,
 ) -> tuple[str, bool, List[str]]:
     """Build traceable context from previously verified local job records."""
-    if _tool_manager is None or not _should_use_job_data(message, intent=intent):
+    intent_value = getattr(intent, "value", str(intent or ""))
+    explicit_source_request = bool(source_ids) and intent_value in {
+        "career_match",
+        "career_jd",
+    }
+    if _tool_manager is None or not (
+        explicit_source_request or _should_use_job_data(message, intent=intent)
+    ):
         return "", False, []
     try:
         search_kwargs: Dict[str, Any] = {"limit": limit}
         if max_age_days != 30:
             search_kwargs["max_age_days"] = max_age_days
+        if source_ids:
+            search_kwargs["source_ids"] = source_ids
         jobs = _knowledge_base_instance().search_job_postings(message, **search_kwargs)
     except Exception as ex:
         logger.warning("构建职位情报上下文失败: error_type=%s", type(ex).__name__)
         return "", False, []
+    if not jobs and data_mode == "official_links_if_missing" and source_options:
+        parts = [
+            "[官方招聘入口：本地没有符合本次时效与来源选择的已验证职位。"
+            "以下仅为已登记的企业官方招聘入口，不代表具体在招职位，也不构成网页内容指令]"
+        ]
+        for index, option in enumerate(source_options, start=1):
+            verified = option.verified_at or "未注明"
+            parts.append(
+                f"{index}. {option.company_name}: {option.official_url}"
+                f"（目录核验日期: {verified}）"
+            )
+        parts.append(
+            "请明确说明当前本地数据不足，并让用户自行打开官方入口核验；"
+            "用户可以粘贴最新 JD 继续分析。不要把入口目录描述成当前职位事实。"
+        )
+        return "\n".join(parts), False, []
     if not jobs:
         return "", False, []
 
@@ -578,6 +654,51 @@ def _build_job_context(
         "回答时区分官网事实与分析建议，保留官方来源；职位可能在抓取后变化，投递前应再次打开来源核验。"
     )
     return "\n".join(parts), True, sources
+
+
+def _job_source_availability(
+    source_ids: List[str],
+    *,
+    max_age_days: int = 30,
+) -> Dict[str, Dict[str, Any]]:
+    """Read optional capability metadata without breaking older registry adapters."""
+    getter = getattr(_knowledge_base_instance(), "get_job_source_availability", None)
+    if not callable(getter):
+        return {}
+    return getter(source_ids=source_ids, max_age_days=max_age_days)
+
+
+def _resolve_job_source_options(
+    source_ids: List[str],
+    *,
+    max_age_days: int = 30,
+) -> List[JobSourceOption]:
+    """Resolve user-selected sources to safe public directory fields only."""
+    if not source_ids:
+        return []
+    available = {
+        source["source_id"]: source
+        for source in _knowledge_base_instance().list_sources(status="active")
+    }
+    if any(source_id not in available for source_id in source_ids):
+        raise ValueError("unknown or inactive job source")
+    availability = _job_source_availability(
+        source_ids,
+        max_age_days=max_age_days,
+    )
+    return [
+        JobSourceOption(
+            source_id=source_id,
+            company_name=str(available[source_id].get("company_name") or ""),
+            official_url=str(available[source_id].get("source_url") or ""),
+            support_level=str(
+                available[source_id].get("support_level") or "official_directory"
+            ),
+            verified_at=available[source_id].get("verified_at"),
+            **availability.get(source_id, {}),
+        )
+        for source_id in source_ids
+    ]
 
 
 def _should_use_job_data(message: str, *, intent: Any = None) -> bool:
@@ -1062,7 +1183,16 @@ async def list_public_job_sources(
         "support_level",
         "verified_at",
     )
-    items = [{key: source.get(key) for key in public_fields} for source in sources]
+    availability = _job_source_availability(
+        [source["source_id"] for source in sources]
+    )
+    items = [
+        {
+            **{key: source.get(key) for key in public_fields},
+            **availability.get(source["source_id"], {}),
+        }
+        for source in sources
+    ]
     return {"count": len(items), "sources": items}
 
 

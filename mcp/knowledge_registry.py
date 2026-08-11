@@ -365,6 +365,71 @@ class KnowledgeRegistry:
             rows = connection.execute(query, tuple(params)).fetchall()
         return [self._source_row(row) for row in rows]
 
+    def get_job_source_availability(
+        self,
+        *,
+        source_ids: Optional[List[str]] = None,
+        max_age_days: int = 30,
+        as_of: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Describe safe user-facing actions from current approved local data."""
+        if not 1 <= max_age_days <= 90:
+            raise ValueError("job max age must be between 1 and 90 days")
+
+        now = datetime.fromisoformat(as_of) if as_of else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = (now - timedelta(days=max_age_days)).isoformat()
+        query = """
+            SELECT
+                s.source_id,
+                COUNT(CASE
+                    WHEN p.status = 'active'
+                     AND p.current_version_id IS NOT NULL
+                     AND p.last_verified_at IS NOT NULL
+                     AND p.last_verified_at >= ?
+                     AND (p.expires_at IS NULL OR p.expires_at > ?)
+                    THEN 1
+                END) AS verified_job_count,
+                MAX(CASE
+                    WHEN p.status = 'active'
+                     AND p.current_version_id IS NOT NULL
+                     AND p.last_verified_at IS NOT NULL
+                     AND p.last_verified_at >= ?
+                     AND (p.expires_at IS NULL OR p.expires_at > ?)
+                    THEN p.last_verified_at
+                END) AS last_job_verified_at
+            FROM sources AS s
+            LEFT JOIN job_postings AS p ON p.source_id = s.source_id
+            WHERE s.status = 'active'
+        """
+        params: List[Any] = [cutoff, now.isoformat(), cutoff, now.isoformat()]
+        if source_ids is not None:
+            if not source_ids:
+                return {}
+            placeholders = ",".join("?" for _ in source_ids)
+            query += f" AND s.source_id IN ({placeholders})"
+            params.extend(source_ids)
+        query += " GROUP BY s.source_id ORDER BY s.source_id"
+
+        with self._connection() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        availability: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            verified_job_count = int(row["verified_job_count"] or 0)
+            actions = ["official_link"]
+            if verified_job_count:
+                actions.insert(0, "verified_local_search")
+            availability[row["source_id"]] = {
+                "data_status": (
+                    "verified_local_data" if verified_job_count else "official_link_only"
+                ),
+                "available_actions": actions,
+                "verified_job_count": verified_job_count,
+                "last_job_verified_at": row["last_job_verified_at"],
+            }
+        return availability
+
     def set_source_status(self, source_id: str, status: str) -> Dict[str, Any]:
         with self._lock, self._connection() as connection:
             cursor = connection.execute(
@@ -1064,17 +1129,25 @@ class KnowledgeRegistry:
         *,
         limit: int = 5,
         max_age_days: int = 30,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search active local postings without refreshing any external source."""
         from core.job_search import rank_job_postings
 
         if not 1 <= max_age_days <= 90:
             raise ValueError("job max age must be between 1 and 90 days")
+        selected_sources: Optional[set[str]] = None
+        if source_ids:
+            if len(source_ids) > 5:
+                raise ValueError("at most five job sources may be selected")
+            selected_sources = set(source_ids)
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=max_age_days)
         self.update_job_freshness(as_of=now.isoformat())
         candidates: List[Dict[str, Any]] = []
         for item in self.list_job_postings(status="active", limit=500):
+            if selected_sources is not None and item.get("source_id") not in selected_sources:
+                continue
             if item.get("freshness_status") == "expired":
                 continue
             verified_value = item.get("last_verified_at")

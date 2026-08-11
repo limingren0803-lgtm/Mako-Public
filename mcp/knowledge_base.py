@@ -334,6 +334,17 @@ class KnowledgeBase:
     def get_source(self, source_id: str) -> Optional[Dict[str, Any]]:
         return self._registry.get_source(source_id)
 
+    def get_job_source_availability(
+        self,
+        *,
+        source_ids: Optional[List[str]] = None,
+        max_age_days: int = 30,
+    ) -> Dict[str, Dict[str, Any]]:
+        return self._registry.get_job_source_availability(
+            source_ids=source_ids,
+            max_age_days=max_age_days,
+        )
+
     def set_source_status(self, source_id: str, status: str) -> Dict[str, Any]:
         return self._registry.set_source_status(source_id, status)
 
@@ -447,9 +458,13 @@ class KnowledgeBase:
         *,
         limit: int = 5,
         max_age_days: int = 30,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return self._registry.search_job_postings(
-            query, limit=limit, max_age_days=max_age_days
+            query,
+            limit=limit,
+            max_age_days=max_age_days,
+            source_ids=source_ids,
         )
 
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:

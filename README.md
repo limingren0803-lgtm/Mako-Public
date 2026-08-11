@@ -4,7 +4,7 @@ AI Career Intelligence System
 
 Mako 是一个面向求职场景的多 Agent 系统，重点服务计划回国参加校招、实习或社会招聘的留学生。系统把用户的教育背景、项目经历、目标岗位和历史对话组织成可复用的 CareerProfile，并根据任务选择岗位匹配、JD 分析、简历优化、面试准备或求职规划能力。
 
-当前稳定版本为 v1.7.0。仓库包含可运行代码、公开基线测试和本地部署文档。
+当前稳定版本为 v1.8.0。仓库包含可运行代码、公开基线测试和本地部署文档。
 
 ## 适用场景
 
@@ -39,7 +39,7 @@ Mako 不补写用户没有提供的经历、职责、技能、证书、数据或
 | 长期记忆 | ChromaDB Episodic Memory 与跨会话画像复用 |
 | 能力加载 | Dynamic SkillManager，按 Intent 注入单个 Career Skill |
 | 知识检索 | RAG knowledge retrieval、文档版本与回滚 |
-| 职位情报 | 15 家官方来源目录、JobPosting 标准化、审核、时效与来源健康管理 |
+| 职位情报 | 15 家官方来源目录、JobPosting 标准化、审核、时效、用户来源选择与数据状态 |
 | 可观测性 | `/monitor`、Prometheus、evaluation |
 | 回答可靠性 | 完整性检测、一次有界续写和质量状态返回 |
 | API 契约 | Request ID、结构化错误、职位来源和安全验证摘要 |
@@ -92,7 +92,9 @@ POST /chat
 
 职位根据最近核验时间和官网有效期标记为 `fresh`、`aging`、`stale` 或 `expired`。`career_match` 和 `career_jd` 可以检索本地有效职位；求职用户可通过 `/chat` 的 `job_max_age_days` 为当前请求选择 1–90 天的核验窗口，默认 30 天。扩大范围时会同时显示最近核验时间和时效状态，expired 职位始终排除。
 
-返回结果会区分官网事实与分析建议，并通过 `job_data_used`、`job_sources` 和 `job_max_age_days` 说明职位数据的使用范围。该选择只作用于当前请求，不写入 CareerProfile 或 Memory。
+`job_source_ids` 允许用户为单次请求选择最多 5 个官方来源。`job_data_mode` 可以选择仅使用本地已核验职位，或在数据不足时返回已登记的官方招聘入口。官方入口只作为目录信息，不会被解释为具体在招职位，也不会把 `job_data_used` 标记为 true。
+
+返回结果会区分官网事实与分析建议，并通过 `job_data_used`、`job_sources`、`job_max_age_days`、`job_source_ids`、`job_data_mode` 和 `job_source_options` 说明职位数据的使用范围。来源选项会显示当前是否存在可检索数据、可用操作、岗位数量和最近核验时间。这些选择只作用于当前请求，不写入 CareerProfile 或 Memory。
 
 ## 快速启动
 
@@ -136,7 +138,7 @@ docker compose down
 ```bash
 curl -X POST "http://localhost:8000/chat" \
   -H "Content-Type: application/json" \
-  -d '{"user_id":"demo-user","job_max_age_days":30,"message":"我准备回国求职，主修信息系统，有数据分析实习经历，适合关注哪些岗位？"}'
+  -d '{"user_id":"demo-user","job_max_age_days":30,"job_source_ids":["src_cn_tencent","src_cn_baidu"],"job_data_mode":"official_links_if_missing","message":"我准备回国求职，主修信息系统，有数据分析实习经历，适合关注哪些岗位？"}'
 ```
 
 响应中的关键字段包括：
@@ -150,6 +152,9 @@ curl -X POST "http://localhost:8000/chat" \
 - `job_data_used`
 - `job_sources`
 - `job_max_age_days`
+- `job_source_ids`
+- `job_data_mode`
+- `job_source_options`
 - `request_id`
 - `response_complete`
 - `continuation_used`
@@ -159,7 +164,7 @@ curl -X POST "http://localhost:8000/chat" \
 
 ## 验证
 
-v1.7.0 发布前完成了以下验证：
+v1.8.0 发布前完成了以下验证：
 
 | 检查项 | 结果 |
 |---|---|
@@ -205,11 +210,12 @@ tools/        持久化备份和恢复验证工具
 
 ## 数据兼容性
 
-v1.7.0 保持现有 API 路径、Redis key、ChromaDB collection 和 CareerProfile Schema 不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径；审核、时效、来源健康和刷新任务数据通过既有 SQLite registry 增量扩展。
+v1.8.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和知识登记库结构不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径。新增请求字段均为可选字段，不提供时保持既有行为。
 
 ## 项目文档
 
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v1.8.0 发布说明](RELEASE_NOTES_v1.8.0.md)
 - [Mako v1.7.0 发布说明](RELEASE_NOTES_v1.7.0.md)
 - [Mako v1.6.0 发布说明](RELEASE_NOTES_v1.6.0.md)
 - [Mako v1.5.0 发布说明](RELEASE_NOTES_v1.5.0.md)
