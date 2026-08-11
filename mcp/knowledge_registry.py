@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -58,6 +58,12 @@ class KnowledgeRegistry:
                     recruitment_channels TEXT NOT NULL DEFAULT '[]',
                     support_level TEXT NOT NULL DEFAULT 'official_directory',
                     verified_at TEXT,
+                    health_status TEXT NOT NULL DEFAULT 'unknown',
+                    last_checked_at TEXT,
+                    last_success_at TEXT,
+                    last_failure_at TEXT,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    last_error_type TEXT,
                     status TEXT NOT NULL DEFAULT 'active',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -108,8 +114,11 @@ class KnowledgeRegistry:
                     title TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active',
                     current_version_id TEXT,
+                    pending_version_id TEXT,
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
+                    last_verified_at TEXT,
+                    freshness_status TEXT NOT NULL DEFAULT 'fresh',
                     expires_at TEXT,
                     FOREIGN KEY(source_id) REFERENCES sources(source_id),
                     UNIQUE(source_id, external_id)
@@ -127,10 +136,33 @@ class KnowledgeRegistry:
                     fetched_at TEXT NOT NULL,
                     published_at TEXT,
                     validation_status TEXT NOT NULL DEFAULT 'active',
+                    review_status TEXT NOT NULL DEFAULT 'approved',
+                    review_notes TEXT NOT NULL DEFAULT '[]',
+                    reviewed_at TEXT,
                     FOREIGN KEY(job_id) REFERENCES job_postings(job_id),
                     UNIQUE(job_id, version_number),
                     UNIQUE(job_id, content_hash)
                 );
+                CREATE TABLE IF NOT EXISTS job_refresh_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    source_url TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    result_summary TEXT NOT NULL DEFAULT '{}',
+                    error_type TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    FOREIGN KEY(source_id) REFERENCES sources(source_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_job_refresh_tasks_status_created
+                    ON job_refresh_tasks(status, created_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_job_refresh_tasks_one_open_source
+                    ON job_refresh_tasks(source_id)
+                    WHERE status IN ('queued', 'running');
                 """
             )
             source_columns = {
@@ -156,6 +188,60 @@ class KnowledgeRegistry:
                 )
             if "verified_at" not in source_columns:
                 connection.execute("ALTER TABLE sources ADD COLUMN verified_at TEXT")
+            if "health_status" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE sources ADD COLUMN health_status TEXT NOT NULL DEFAULT 'unknown'"
+                )
+            if "last_checked_at" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN last_checked_at TEXT")
+            if "last_success_at" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN last_success_at TEXT")
+            if "last_failure_at" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN last_failure_at TEXT")
+            if "consecutive_failures" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE sources ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_error_type" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN last_error_type TEXT")
+
+            job_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(job_postings)").fetchall()
+            }
+            if "pending_version_id" not in job_columns:
+                connection.execute("ALTER TABLE job_postings ADD COLUMN pending_version_id TEXT")
+            if "last_verified_at" not in job_columns:
+                connection.execute("ALTER TABLE job_postings ADD COLUMN last_verified_at TEXT")
+            if "freshness_status" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE job_postings ADD COLUMN freshness_status TEXT NOT NULL DEFAULT 'fresh'"
+                )
+            connection.execute(
+                "UPDATE job_postings SET last_verified_at = COALESCE(last_verified_at, last_seen_at)"
+            )
+
+            version_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(job_versions)").fetchall()
+            }
+            if "review_status" not in version_columns:
+                connection.execute(
+                    "ALTER TABLE job_versions ADD COLUMN review_status TEXT NOT NULL DEFAULT 'approved'"
+                )
+            if "review_notes" not in version_columns:
+                connection.execute(
+                    "ALTER TABLE job_versions ADD COLUMN review_notes TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "reviewed_at" not in version_columns:
+                connection.execute("ALTER TABLE job_versions ADD COLUMN reviewed_at TEXT")
+            connection.execute(
+                """
+                UPDATE job_versions
+                SET reviewed_at = COALESCE(reviewed_at, fetched_at)
+                WHERE review_status = 'approved'
+                """
+            )
 
     def register_source(
         self,
@@ -526,11 +612,18 @@ class KnowledgeRegistry:
         self.record_event("document_status_changed", "document", document_id, "success", {"status": status})
         return self.get_document(document_id) or {}
 
-    def upsert_job_posting(self, posting: Any) -> Dict[str, Any]:
-        """Insert a normalized posting or activate a new content version."""
+    def upsert_job_posting(
+        self,
+        posting: Any,
+        *,
+        review_status: str = "approved",
+    ) -> Dict[str, Any]:
+        """Insert a posting while keeping unreviewed versions out of retrieval."""
         from core.job_posting import JobPosting
         from mcp.knowledge_sources import SourceSecurityError, validate_source_url
 
+        if review_status not in {"approved", "pending"}:
+            raise ValueError("invalid job review status")
         if not isinstance(posting, JobPosting):
             posting = JobPosting.model_validate(posting)
         content_hash = posting.content_hash()
@@ -538,6 +631,7 @@ class KnowledgeRegistry:
         fetched_at = posting.fetched_at.isoformat()
         published_at = posting.published_at.isoformat() if posting.published_at else None
         expires_at = posting.valid_through.isoformat() if posting.valid_through else None
+        reviewed_at = _utc_now() if review_status == "approved" else None
 
         with self._lock, self._connection() as connection:
             source = connection.execute(
@@ -560,14 +654,17 @@ class KnowledgeRegistry:
             ).fetchone()
             if job:
                 job_id = job["job_id"]
+                current_version_id = job["current_version_id"]
             else:
                 job_id = f"job_{uuid.uuid4().hex[:16]}"
+                current_version_id = None
                 connection.execute(
                     """
                     INSERT INTO job_postings (
                         job_id, source_id, external_id, company_name, title,
-                        status, first_seen_at, last_seen_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        status, first_seen_at, last_seen_at, last_verified_at,
+                        freshness_status, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'fresh', ?)
                     """,
                     (
                         job_id,
@@ -575,55 +672,66 @@ class KnowledgeRegistry:
                         posting.external_id,
                         posting.company_name,
                         posting.title,
-                        posting.status.value,
+                        posting.status.value if review_status == "approved" else "inactive",
                         fetched_at,
                         fetched_at,
+                        fetched_at if review_status == "approved" else None,
                         expires_at,
                     ),
                 )
 
             duplicate = connection.execute(
-                "SELECT job_version_id FROM job_versions WHERE job_id = ? AND content_hash = ?",
+                """
+                SELECT job_version_id, version_number, review_status, validation_status
+                FROM job_versions WHERE job_id = ? AND content_hash = ?
+                """,
                 (job_id, content_hash),
             ).fetchone()
             if duplicate:
-                connection.execute(
-                    """
-                    UPDATE job_postings
-                    SET company_name = ?, title = ?, status = ?, last_seen_at = ?, expires_at = ?
-                    WHERE job_id = ?
-                    """,
-                    (
-                        posting.company_name,
-                        posting.title,
-                        posting.status.value,
-                        fetched_at,
-                        expires_at,
-                        job_id,
-                    ),
-                )
                 changed = False
                 version_id = duplicate["job_version_id"]
+                version_number = duplicate["version_number"]
+                if duplicate["review_status"] == "approved":
+                    connection.execute(
+                        """
+                        UPDATE job_postings
+                        SET company_name = ?, title = ?, status = ?, last_seen_at = ?,
+                            last_verified_at = ?, freshness_status = 'fresh', expires_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (
+                            posting.company_name,
+                            posting.title,
+                            posting.status.value,
+                            fetched_at,
+                            fetched_at,
+                            expires_at,
+                            job_id,
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE job_postings
+                        SET pending_version_id = ?, last_seen_at = ?, expires_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (version_id, fetched_at, expires_at, job_id),
+                    )
             else:
                 version_number = connection.execute(
                     "SELECT COALESCE(MAX(version_number), 0) + 1 FROM job_versions WHERE job_id = ?",
                     (job_id,),
                 ).fetchone()[0]
                 version_id = f"jobver_{uuid.uuid4().hex[:16]}"
-                connection.execute(
-                    """
-                    UPDATE job_versions
-                    SET validation_status = 'superseded'
-                    WHERE job_id = ? AND validation_status = 'active'
-                    """,
-                    (job_id,),
-                )
+                validation_status = "active" if review_status == "approved" else "staged"
                 connection.execute(
                     """
                     INSERT INTO job_versions (
                         job_version_id, job_id, version_number, content_hash,
-                        payload, source_url, fetched_at, published_at, validation_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                        payload, source_url, fetched_at, published_at, validation_status,
+                        review_status, reviewed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         version_id,
@@ -634,36 +742,95 @@ class KnowledgeRegistry:
                         posting.source_url,
                         fetched_at,
                         published_at,
+                        validation_status,
+                        review_status,
+                        reviewed_at,
                     ),
                 )
-                connection.execute(
-                    """
-                    UPDATE job_postings
-                    SET company_name = ?, title = ?, status = ?, current_version_id = ?,
-                        last_seen_at = ?, expires_at = ?
-                    WHERE job_id = ?
-                    """,
-                    (
-                        posting.company_name,
-                        posting.title,
-                        posting.status.value,
-                        version_id,
-                        fetched_at,
-                        expires_at,
-                        job_id,
-                    ),
-                )
+                if review_status == "approved":
+                    connection.execute(
+                        """
+                        UPDATE job_versions
+                        SET validation_status = 'superseded'
+                        WHERE job_id = ? AND validation_status = 'active'
+                          AND job_version_id <> ?
+                        """,
+                        (job_id, version_id),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE job_postings
+                        SET company_name = ?, title = ?, status = ?, current_version_id = ?,
+                            pending_version_id = NULL, last_seen_at = ?, last_verified_at = ?,
+                            freshness_status = 'fresh', expires_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (
+                            posting.company_name,
+                            posting.title,
+                            posting.status.value,
+                            version_id,
+                            fetched_at,
+                            fetched_at,
+                            expires_at,
+                            job_id,
+                        ),
+                    )
+                else:
+                    previous_pending = connection.execute(
+                        "SELECT pending_version_id FROM job_postings WHERE job_id = ?",
+                        (job_id,),
+                    ).fetchone()[0]
+                    if previous_pending and previous_pending != version_id:
+                        connection.execute(
+                            """
+                            UPDATE job_versions
+                            SET validation_status = 'superseded', review_status = 'rejected',
+                                review_notes = ?, reviewed_at = ?
+                            WHERE job_version_id = ? AND review_status = 'pending'
+                            """,
+                            (
+                                json.dumps(["superseded_by_newer_pending_version"]),
+                                _utc_now(),
+                                previous_pending,
+                            ),
+                        )
+                    connection.execute(
+                        """
+                        UPDATE job_postings
+                        SET pending_version_id = ?, last_seen_at = ?, expires_at = ?,
+                            status = CASE WHEN current_version_id IS NULL THEN 'inactive' ELSE status END
+                        WHERE job_id = ?
+                        """,
+                        (version_id, fetched_at, expires_at, job_id),
+                    )
                 changed = True
 
         self.record_event(
-            "job_version_activated" if changed else "job_seen_unchanged",
+            (
+                "job_version_activated"
+                if changed and review_status == "approved"
+                else "job_version_staged"
+                if changed
+                else "job_seen_unchanged"
+            ),
             "job_posting",
             job_id,
             "success",
-            {"job_version_id": version_id, "source_id": posting.source_id},
+            {
+                "job_version_id": version_id,
+                "source_id": posting.source_id,
+                "review_status": review_status,
+            },
         )
         result = self.get_job_posting(job_id) or {}
         result["changed"] = changed
+        result["submitted_version_id"] = version_id
+        result["submitted_version_number"] = version_number
+        result["review_status"] = duplicate["review_status"] if duplicate else review_status
+        result["previous_active_version_preserved"] = bool(
+            review_status == "pending" and current_version_id
+        )
         return result
 
     def get_job_posting(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -671,7 +838,8 @@ class KnowledgeRegistry:
             row = connection.execute(
                 """
                 SELECT j.*, v.version_number, v.content_hash, v.payload,
-                       v.source_url, v.fetched_at, v.published_at
+                       v.source_url, v.fetched_at, v.published_at,
+                       v.validation_status, v.review_status, v.review_notes, v.reviewed_at
                 FROM job_postings j
                 LEFT JOIN job_versions v ON v.job_version_id = j.current_version_id
                 WHERE j.job_id = ?
@@ -682,6 +850,129 @@ class KnowledgeRegistry:
             return None
         result = dict(row)
         result["payload"] = json.loads(result["payload"]) if result.get("payload") else None
+        result["review_notes"] = json.loads(result.get("review_notes") or "[]")
+        return result
+
+    def list_pending_job_versions(
+        self,
+        *,
+        source_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Return staged job versions awaiting an operator decision."""
+        limit = min(max(limit, 1), 500)
+        query = """
+            SELECT j.job_id, j.source_id, j.external_id, j.company_name, j.title,
+                   j.current_version_id, j.pending_version_id, s.official_domain,
+                   v.job_version_id, v.version_number, v.content_hash, v.payload,
+                   v.source_url, v.fetched_at, v.published_at, v.validation_status,
+                   v.review_status, v.review_notes, v.reviewed_at
+            FROM job_versions v
+            JOIN job_postings j ON j.job_id = v.job_id
+            JOIN sources s ON s.source_id = j.source_id
+            WHERE v.review_status = 'pending' AND v.validation_status = 'staged'
+        """
+        params: List[Any] = []
+        if source_id:
+            query += " AND j.source_id = ?"
+            params.append(source_id)
+        query += " ORDER BY v.fetched_at, v.job_version_id LIMIT ?"
+        params.append(limit)
+        with self._connection() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        results: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item["payload"])
+            item["review_notes"] = json.loads(item.get("review_notes") or "[]")
+            results.append(item)
+        return results
+
+    def review_job_version(
+        self,
+        *,
+        job_id: str,
+        version_id: str,
+        decision: str,
+        notes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Approve or reject one staged version without exposing it beforehand."""
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("invalid job review decision")
+        clean_notes = [str(note).strip() for note in (notes or []) if str(note).strip()]
+        reviewed_at = _utc_now()
+        with self._lock, self._connection() as connection:
+            job = connection.execute(
+                "SELECT * FROM job_postings WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if not job:
+                raise KeyError(job_id)
+            version = connection.execute(
+                "SELECT * FROM job_versions WHERE job_version_id = ? AND job_id = ?",
+                (version_id, job_id),
+            ).fetchone()
+            if not version:
+                raise KeyError(version_id)
+            if version["review_status"] != "pending" or version["validation_status"] != "staged":
+                raise ValueError("job version is not pending review")
+
+            if decision == "approved":
+                payload = json.loads(version["payload"])
+                connection.execute(
+                    """
+                    UPDATE job_versions SET validation_status = 'superseded'
+                    WHERE job_id = ? AND validation_status = 'active'
+                    """,
+                    (job_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE job_versions
+                    SET validation_status = 'active', review_status = 'approved',
+                        review_notes = ?, reviewed_at = ?
+                    WHERE job_version_id = ?
+                    """,
+                    (json.dumps(clean_notes, ensure_ascii=False), reviewed_at, version_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE job_postings
+                    SET company_name = ?, title = ?, status = ?, current_version_id = ?,
+                        pending_version_id = NULL, last_verified_at = ?,
+                        freshness_status = 'fresh', expires_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (
+                        payload["company_name"], payload["title"], payload["status"],
+                        version_id, reviewed_at, payload.get("valid_through"), job_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE job_versions
+                    SET validation_status = 'rejected', review_status = 'rejected',
+                        review_notes = ?, reviewed_at = ?
+                    WHERE job_version_id = ?
+                    """,
+                    (json.dumps(clean_notes, ensure_ascii=False), reviewed_at, version_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE job_postings
+                    SET pending_version_id = CASE WHEN pending_version_id = ? THEN NULL
+                                                  ELSE pending_version_id END
+                    WHERE job_id = ?
+                    """,
+                    (version_id, job_id),
+                )
+        self.record_event(
+            "job_version_reviewed", "job_posting", job_id, decision,
+            {"job_version_id": version_id, "notes_count": len(clean_notes)},
+        )
+        result = self.get_job_posting(job_id) or {}
+        result["reviewed_version_id"] = version_id
+        result["decision"] = decision
         return result
 
     def list_job_postings(
@@ -702,7 +993,8 @@ class KnowledgeRegistry:
             params.append(status)
         query = """
             SELECT j.*, v.version_number, v.content_hash, v.payload,
-                   v.source_url, v.fetched_at, v.published_at
+                   v.source_url, v.fetched_at, v.published_at,
+                   v.validation_status, v.review_status, v.review_notes, v.reviewed_at
             FROM job_postings j
             LEFT JOIN job_versions v ON v.job_version_id = j.current_version_id
         """
@@ -716,6 +1008,7 @@ class KnowledgeRegistry:
         for row in rows:
             item = dict(row)
             item["payload"] = json.loads(item["payload"]) if item.get("payload") else None
+            item["review_notes"] = json.loads(item.get("review_notes") or "[]")
             results.append(item)
         return results
 
@@ -765,12 +1058,75 @@ class KnowledgeRegistry:
         )
         return count
 
-    def search_job_postings(self, query: str, *, limit: int = 5) -> List[Dict[str, Any]]:
+    def search_job_postings(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        max_age_days: int = 30,
+    ) -> List[Dict[str, Any]]:
         """Search active local postings without refreshing any external source."""
         from core.job_search import rank_job_postings
 
-        candidates = self.list_job_postings(status="active", limit=500)
+        if not 1 <= max_age_days <= 90:
+            raise ValueError("job max age must be between 1 and 90 days")
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=max_age_days)
+        self.update_job_freshness(as_of=now.isoformat())
+        candidates: List[Dict[str, Any]] = []
+        for item in self.list_job_postings(status="active", limit=500):
+            if item.get("freshness_status") == "expired":
+                continue
+            verified_value = item.get("last_verified_at")
+            if not verified_value:
+                continue
+            try:
+                verified_at = datetime.fromisoformat(
+                    str(verified_value).replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if verified_at.tzinfo is None:
+                verified_at = verified_at.replace(tzinfo=timezone.utc)
+            if verified_at >= cutoff:
+                candidates.append(item)
         return rank_job_postings(query, candidates, limit=limit)
+
+    def update_job_freshness(
+        self,
+        *,
+        as_of: Optional[str] = None,
+        fresh_days: int = 7,
+        stale_days: int = 30,
+    ) -> Dict[str, int]:
+        """Classify approved jobs by verification age and declared expiry."""
+        if fresh_days < 0 or stale_days <= fresh_days:
+            raise ValueError("invalid freshness thresholds")
+        now = datetime.fromisoformat(as_of) if as_of else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        fresh_cutoff = (now - timedelta(days=fresh_days)).isoformat()
+        stale_cutoff = (now - timedelta(days=stale_days)).isoformat()
+        counts = {"fresh": 0, "aging": 0, "stale": 0, "expired": 0}
+        with self._lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT job_id, last_verified_at, expires_at FROM job_postings WHERE status = 'active'"
+            ).fetchall()
+            for row in rows:
+                if row["expires_at"] and row["expires_at"] <= now.isoformat():
+                    freshness, status = "expired", "expired"
+                elif row["last_verified_at"] and row["last_verified_at"] >= fresh_cutoff:
+                    freshness, status = "fresh", "active"
+                elif row["last_verified_at"] and row["last_verified_at"] >= stale_cutoff:
+                    freshness, status = "aging", "active"
+                else:
+                    freshness, status = "stale", "active"
+                connection.execute(
+                    "UPDATE job_postings SET freshness_status = ?, status = ? WHERE job_id = ?",
+                    (freshness, status, row["job_id"]),
+                )
+                counts[freshness] += 1
+        return counts
 
     def expire_job_postings(self, *, as_of: Optional[str] = None) -> int:
         """Mark active postings expired when their declared validity has ended."""
@@ -778,7 +1134,7 @@ class KnowledgeRegistry:
         with self._lock, self._connection() as connection:
             cursor = connection.execute(
                 """
-                UPDATE job_postings SET status = 'expired'
+                UPDATE job_postings SET status = 'expired', freshness_status = 'expired'
                 WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?
                 """,
                 (as_of,),
@@ -793,6 +1149,266 @@ class KnowledgeRegistry:
                 {"as_of": as_of, "expired_count": count},
             )
         return count
+
+    def update_source_health(
+        self,
+        source_id: str,
+        outcome: str,
+        *,
+        error_type: Optional[str] = None,
+        checked_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record a bounded source check without storing response content."""
+        if outcome not in {"success", "failed", "rejected"}:
+            raise ValueError("invalid source health outcome")
+        checked_at = checked_at or _utc_now()
+        with self._lock, self._connection() as connection:
+            source = connection.execute(
+                "SELECT consecutive_failures FROM sources WHERE source_id = ?", (source_id,)
+            ).fetchone()
+            if not source:
+                raise KeyError(source_id)
+            if outcome == "success":
+                health_status = "healthy"
+                failures = 0
+                connection.execute(
+                    """
+                    UPDATE sources SET health_status = ?, last_checked_at = ?,
+                        last_success_at = ?, consecutive_failures = 0,
+                        last_error_type = NULL, updated_at = ?
+                    WHERE source_id = ?
+                    """,
+                    (health_status, checked_at, checked_at, checked_at, source_id),
+                )
+            else:
+                failures = int(source["consecutive_failures"] or 0) + 1
+                health_status = (
+                    "review_required" if outcome == "rejected"
+                    else "unavailable" if failures >= 3
+                    else "degraded"
+                )
+                connection.execute(
+                    """
+                    UPDATE sources SET health_status = ?, last_checked_at = ?,
+                        last_failure_at = ?, consecutive_failures = ?,
+                        last_error_type = ?, updated_at = ?
+                    WHERE source_id = ?
+                    """,
+                    (
+                        health_status, checked_at, checked_at, failures,
+                        error_type or "UnknownError", checked_at, source_id,
+                    ),
+                )
+        return self.get_source(source_id) or {}
+
+    def create_job_refresh_task(
+        self,
+        *,
+        source_id: str,
+        task_type: str,
+        source_url: Optional[str] = None,
+        max_attempts: int = 1,
+    ) -> Dict[str, Any]:
+        """Create one persistent operator-run refresh task."""
+        if task_type not in {"managed_refresh", "url_import"}:
+            raise ValueError("invalid job refresh task type")
+        if task_type == "url_import" and not source_url:
+            raise ValueError("url_import requires source_url")
+        if task_type == "managed_refresh" and source_url:
+            raise ValueError("managed_refresh does not accept source_url")
+        if not 1 <= max_attempts <= 3:
+            raise ValueError("max_attempts must be between 1 and 3")
+        source = self.get_source(source_id)
+        if not source:
+            raise KeyError(source_id)
+        if source["status"] != "active":
+            raise ValueError("job source is not active")
+        if task_type == "url_import":
+            from mcp.knowledge_sources import validate_source_url
+
+            validate_source_url(
+                source_url or "",
+                [source["official_domain"], *source.get("delegated_domains", [])],
+            )
+        elif source["refresh_policy"] != "manual" or not source["automation_allowed"]:
+            raise ValueError("managed refresh is not approved for this source")
+        self.recover_stale_job_refresh_tasks()
+        task_id = f"jobtask_{uuid.uuid4().hex[:16]}"
+        created_at = _utc_now()
+        try:
+            with self._lock, self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO job_refresh_tasks (
+                        task_id, source_id, task_type, source_url, max_attempts, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (task_id, source_id, task_type, source_url, max_attempts, created_at),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("source already has an open refresh task") from exc
+        self.record_event(
+            "job_refresh_task_created", "job_refresh_task", task_id, "success",
+            {"source_id": source_id, "task_type": task_type},
+        )
+        return self.get_job_refresh_task(task_id) or {}
+
+    def get_job_refresh_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM job_refresh_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return self._task_row(row) if row else None
+
+    def list_job_refresh_tasks(
+        self,
+        *,
+        source_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        allowed = {"queued", "running", "succeeded", "failed", "rejected"}
+        if status and status not in allowed:
+            raise ValueError("invalid job refresh task status")
+        limit = min(max(limit, 1), 500)
+        query = "SELECT * FROM job_refresh_tasks"
+        clauses: List[str] = []
+        params: List[Any] = []
+        if source_id:
+            clauses.append("source_id = ?")
+            params.append(source_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC, task_id LIMIT ?"
+        params.append(limit)
+        with self._connection() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [self._task_row(row) for row in rows]
+
+    def claim_job_refresh_task(self, task_id: str) -> Dict[str, Any]:
+        with self._lock, self._connection() as connection:
+            task = connection.execute(
+                "SELECT * FROM job_refresh_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if not task:
+                raise KeyError(task_id)
+            if task["status"] != "queued":
+                raise ValueError("job refresh task is not queued")
+            if task["attempts"] >= task["max_attempts"]:
+                raise ValueError("job refresh task has no attempts remaining")
+            cursor = connection.execute(
+                """
+                UPDATE job_refresh_tasks SET status = 'running', attempts = attempts + 1,
+                    started_at = ?, completed_at = NULL, error_type = NULL
+                WHERE task_id = ? AND status = 'queued' AND attempts < max_attempts
+                """,
+                (_utc_now(), task_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("job refresh task could not be claimed")
+        return self.get_job_refresh_task(task_id) or {}
+
+    def recover_stale_job_refresh_tasks(
+        self,
+        *,
+        as_of: Optional[str] = None,
+        timeout_minutes: int = 30,
+    ) -> int:
+        """Release tasks left running after an interrupted request."""
+        if not 1 <= timeout_minutes <= 1440:
+            raise ValueError("invalid job refresh task timeout")
+        now = datetime.fromisoformat(as_of) if as_of else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = (now - timedelta(minutes=timeout_minutes)).isoformat()
+        completed_at = now.isoformat()
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE job_refresh_tasks
+                SET status = 'failed', error_type = 'ProcessInterrupted',
+                    result_summary = '{}', completed_at = ?
+                WHERE status = 'running'
+                  AND (started_at IS NULL OR started_at <= ?)
+                """,
+                (completed_at, cutoff),
+            )
+            count = cursor.rowcount
+        if count:
+            self.record_event(
+                "job_refresh_tasks_recovered", "job_refresh_task", "batch", "success",
+                {"recovered_count": count},
+            )
+        return count
+
+    def complete_job_refresh_task(
+        self,
+        task_id: str,
+        *,
+        outcome: str,
+        result_summary: Optional[Dict[str, Any]] = None,
+        error_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if outcome not in {"succeeded", "failed", "rejected"}:
+            raise ValueError("invalid job refresh task outcome")
+        with self._lock, self._connection() as connection:
+            task = connection.execute(
+                "SELECT status FROM job_refresh_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if not task:
+                raise KeyError(task_id)
+            if task["status"] != "running":
+                raise ValueError("job refresh task is not running")
+            connection.execute(
+                """
+                UPDATE job_refresh_tasks
+                SET status = ?, result_summary = ?, error_type = ?, completed_at = ?
+                WHERE task_id = ?
+                """,
+                (
+                    outcome, json.dumps(result_summary or {}, ensure_ascii=False),
+                    error_type, _utc_now(), task_id,
+                ),
+            )
+        self.record_event(
+            "job_refresh_task_completed", "job_refresh_task", task_id, outcome,
+            {"error_type": error_type} if error_type else {},
+        )
+        return self.get_job_refresh_task(task_id) or {}
+
+    def retry_job_refresh_task(self, task_id: str) -> Dict[str, Any]:
+        self.recover_stale_job_refresh_tasks()
+        with self._lock, self._connection() as connection:
+            task = connection.execute(
+                "SELECT * FROM job_refresh_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if not task:
+                raise KeyError(task_id)
+            if task["status"] not in {"failed", "rejected"}:
+                raise ValueError("only failed or rejected tasks can be retried")
+            if task["attempts"] >= task["max_attempts"]:
+                raise ValueError("job refresh task has no attempts remaining")
+            open_task = connection.execute(
+                """
+                SELECT task_id FROM job_refresh_tasks
+                WHERE source_id = ? AND status IN ('queued', 'running')
+                """,
+                (task["source_id"],),
+            ).fetchone()
+            if open_task:
+                raise ValueError("source already has an open refresh task")
+            connection.execute(
+                """
+                UPDATE job_refresh_tasks SET status = 'queued', result_summary = '{}',
+                    error_type = NULL, started_at = NULL, completed_at = NULL
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            )
+        return self.get_job_refresh_task(task_id) or {}
 
     def record_event(
         self,
@@ -851,4 +1467,10 @@ class KnowledgeRegistry:
             result.get("recruitment_channels") or "[]"
         )
         result["automation_allowed"] = bool(result.get("automation_allowed"))
+        return result
+
+    @staticmethod
+    def _task_row(row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["result_summary"] = json.loads(result.get("result_summary") or "{}")
         return result

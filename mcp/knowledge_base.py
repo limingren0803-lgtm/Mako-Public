@@ -370,6 +370,54 @@ class KnowledgeBase:
             limit=limit,
         )
 
+    def list_pending_job_versions(
+        self,
+        *,
+        source_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.list_pending_job_versions(source_id=source_id, limit=limit)
+
+    def review_job_version(
+        self,
+        *,
+        job_id: str,
+        version_id: str,
+        decision: str,
+        notes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        return self._registry.review_job_version(
+            job_id=job_id,
+            version_id=version_id,
+            decision=decision,
+            notes=notes,
+        )
+
+    def update_job_freshness(self) -> Dict[str, int]:
+        return self._registry.update_job_freshness()
+
+    def create_job_refresh_task(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._registry.create_job_refresh_task(**kwargs)
+
+    def list_job_refresh_tasks(
+        self,
+        *,
+        source_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.list_job_refresh_tasks(
+            source_id=source_id, status=status, limit=limit
+        )
+
+    async def run_job_refresh_task(self, task_id: str) -> Dict[str, Any]:
+        from mcp.job_pipeline import run_job_refresh_task
+
+        return await run_job_refresh_task(registry=self._registry, task_id=task_id)
+
+    def retry_job_refresh_task(self, task_id: str) -> Dict[str, Any]:
+        return self._registry.retry_job_refresh_task(task_id)
+
     async def refresh_job_source(self, source_id: str) -> Dict[str, Any]:
         from mcp.job_pipeline import refresh_job_source
 
@@ -393,8 +441,16 @@ class KnowledgeBase:
             payload=payload,
         )
 
-    def search_job_postings(self, query: str, *, limit: int = 5) -> List[Dict[str, Any]]:
-        return self._registry.search_job_postings(query, limit=limit)
+    def search_job_postings(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        max_age_days: int = 30,
+    ) -> List[Dict[str, Any]]:
+        return self._registry.search_job_postings(
+            query, limit=limit, max_age_days=max_age_days
+        )
 
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """

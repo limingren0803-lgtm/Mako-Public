@@ -35,6 +35,7 @@ def ingest_job_html(
     source: Dict[str, Any],
     html: str,
     source_url: str,
+    review_status: str = "approved",
 ) -> Dict[str, Any]:
     """Normalize and version one safely retrieved official page."""
     adapter = adapter_for_source(source["source_id"], allow_generic=True)
@@ -55,7 +56,7 @@ def ingest_job_html(
     unchanged = 0
     job_ids: List[str] = []
     for posting in page.postings:
-        result = registry.upsert_job_posting(posting)
+        result = registry.upsert_job_posting(posting, review_status=review_status)
         job_ids.append(result["job_id"])
         if result["changed"]:
             changed += 1
@@ -75,6 +76,7 @@ def ingest_job_html(
         "page_size": page.page_size,
         "total": page.total,
         "complete_snapshot": page.complete_snapshot,
+        "review_status": review_status,
     }
 
 
@@ -118,7 +120,7 @@ def import_job_posting(
             "job content failed instruction isolation checks: " + ",".join(flags)
         )
 
-    result = registry.upsert_job_posting(posting)
+    result = registry.upsert_job_posting(posting, review_status="pending")
     outcome = "changed" if result["changed"] else "unchanged"
     JOB_POSTINGS_INGESTED_TOTAL.labels(source_id, outcome).inc()
     registry.record_event(
@@ -157,7 +159,9 @@ async def import_job_url(
             source=source,
             html=fetched.raw_content,
             source_url=fetched.final_url,
+            review_status="pending",
         )
+        registry.update_source_health(source_id, "success")
         registry.record_event(
             "job_url_import",
             "source",
@@ -172,6 +176,11 @@ async def import_job_url(
         return {**result, "import_method": "official_url", "source_url": fetched.final_url}
     except Exception as exc:
         rejected = isinstance(exc, (SourceSecurityError, JobAdapterError))
+        registry.update_source_health(
+            source_id,
+            "rejected" if rejected else "failed",
+            error_type=type(exc).__name__,
+        )
         registry.record_event(
             "job_url_import",
             "source",
@@ -199,7 +208,9 @@ async def refresh_job_source(*, registry: Any, source_id: str) -> Dict[str, Any]
             source=source,
             html=fetched.raw_content,
             source_url=fetched.final_url,
+            review_status="pending",
         )
+        registry.update_source_health(source_id, "success")
         registry.record_event(
             "job_source_refresh",
             "source",
@@ -216,6 +227,11 @@ async def refresh_job_source(*, registry: Any, source_id: str) -> Dict[str, Any]
         return result
     except Exception as exc:
         rejected = isinstance(exc, (SourceSecurityError, JobAdapterError))
+        registry.update_source_health(
+            source_id,
+            "rejected" if rejected else "failed",
+            error_type=type(exc).__name__,
+        )
         registry.record_event(
             "job_source_refresh",
             "source",
@@ -227,4 +243,31 @@ async def refresh_job_source(*, registry: Any, source_id: str) -> Dict[str, Any]
             source_id,
             "rejected" if rejected else "failed",
         ).inc()
+        raise
+
+
+async def run_job_refresh_task(*, registry: Any, task_id: str) -> Dict[str, Any]:
+    """Run one explicitly claimed persistent task in the current process."""
+    task = registry.claim_job_refresh_task(task_id)
+    try:
+        if task["task_type"] == "managed_refresh":
+            result = await refresh_job_source(registry=registry, source_id=task["source_id"])
+        elif task["task_type"] == "url_import":
+            result = await import_job_url(
+                registry=registry,
+                source_id=task["source_id"],
+                source_url=task["source_url"],
+            )
+        else:
+            raise ValueError("unsupported job refresh task type")
+        return registry.complete_job_refresh_task(
+            task_id, outcome="succeeded", result_summary=result
+        )
+    except Exception as exc:
+        rejected = isinstance(exc, (SourceSecurityError, JobAdapterError))
+        registry.complete_job_refresh_task(
+            task_id,
+            outcome="rejected" if rejected else "failed",
+            error_type=type(exc).__name__,
+        )
         raise

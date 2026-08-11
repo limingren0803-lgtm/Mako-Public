@@ -4,7 +4,7 @@ AI Career Intelligence System
 
 Mako 是一个面向求职场景的多 Agent 系统，重点服务计划回国参加校招、实习或社会招聘的留学生。系统把用户的教育背景、项目经历、目标岗位和历史对话组织成可复用的 CareerProfile，并根据任务选择岗位匹配、JD 分析、简历优化、面试准备或求职规划能力。
 
-当前稳定版本为 v1.6.0。仓库包含可运行代码、公开基线测试和本地部署文档。
+当前稳定版本为 v1.7.0。仓库包含可运行代码、公开基线测试和本地部署文档。
 
 ## 适用场景
 
@@ -39,7 +39,7 @@ Mako 不补写用户没有提供的经历、职责、技能、证书、数据或
 | 长期记忆 | ChromaDB Episodic Memory 与跨会话画像复用 |
 | 能力加载 | Dynamic SkillManager，按 Intent 注入单个 Career Skill |
 | 知识检索 | RAG knowledge retrieval、文档版本与回滚 |
-| 职位情报 | 15 家官方来源目录、JobPosting 标准化、版本与状态管理 |
+| 职位情报 | 15 家官方来源目录、JobPosting 标准化、审核、时效与来源健康管理 |
 | 可观测性 | `/monitor`、Prometheus、evaluation |
 | 回答可靠性 | 完整性检测、一次有界续写和质量状态返回 |
 | API 契约 | Request ID、结构化错误、职位来源和安全验证摘要 |
@@ -62,11 +62,12 @@ POST /chat
 
 ```text
 企业官方招聘站点
-  -> 来源登记与管理员审批
+  -> 来源登记与安全检查
   -> 网络和内容安全检查
   -> 站点适配与 JobPosting 标准化
-  -> SQLite 版本及生命周期登记
-  -> CareerAgent 本地检索
+  -> 待审核版本
+  -> SQLite 当前版本、历史与时效状态
+  -> CareerAgent 按用户选择的核验窗口检索
   -> /chat 返回使用状态与官方来源
 ```
 
@@ -87,9 +88,11 @@ POST /chat
 
 默认目录不包含社交平台、招聘聚合站、论坛或来源不明的网站。获取过程检查 HTTPS、允许域名、DNS 和实际连接地址、重定向、robots 规则、响应类型、内容大小及常见指令注入特征。来源进入目录不代表该站点已经具备自动分页或批量刷新能力，默认自动获取保持关闭。无法可靠解析的页面会保留旧数据，不尝试绕过登录、验证码或访问限制。
 
-`JobPosting` 记录企业、职位、地点、职责、要求、招聘类型、发布时间、有效期、更新时间和官方链接。内容哈希用于识别变化；发生有效更新时保留历史版本。职位状态分为 `active`、`inactive` 和 `expired`，只有经过确认的完整快照才能停用本次没有出现的职位。
+`JobPosting` 记录企业、职位、地点、职责、要求、招聘类型、发布时间、有效期、更新时间和官方链接。新职位或发生变化的版本先进入待审核状态，不会在审核前替换当前有效版本。内容哈希用于识别变化，审核结果和历史版本保存在 SQLite 中。
 
-`career_match` 和 `career_jd` 可以检索本地有效职位。返回结果会区分官网事实与分析建议，并通过 `job_data_used` 和 `job_sources` 说明是否使用了职位数据及其来源。
+职位根据最近核验时间和官网有效期标记为 `fresh`、`aging`、`stale` 或 `expired`。`career_match` 和 `career_jd` 可以检索本地有效职位；求职用户可通过 `/chat` 的 `job_max_age_days` 为当前请求选择 1–90 天的核验窗口，默认 30 天。扩大范围时会同时显示最近核验时间和时效状态，expired 职位始终排除。
+
+返回结果会区分官网事实与分析建议，并通过 `job_data_used`、`job_sources` 和 `job_max_age_days` 说明职位数据的使用范围。该选择只作用于当前请求，不写入 CareerProfile 或 Memory。
 
 ## 快速启动
 
@@ -133,7 +136,7 @@ docker compose down
 ```bash
 curl -X POST "http://localhost:8000/chat" \
   -H "Content-Type: application/json" \
-  -d '{"user_id":"demo-user","message":"我准备回国求职，主修信息系统，有数据分析实习经历，适合关注哪些岗位？"}'
+  -d '{"user_id":"demo-user","job_max_age_days":30,"message":"我准备回国求职，主修信息系统，有数据分析实习经历，适合关注哪些岗位？"}'
 ```
 
 响应中的关键字段包括：
@@ -146,6 +149,7 @@ curl -X POST "http://localhost:8000/chat" \
 - `knowledge_used`
 - `job_data_used`
 - `job_sources`
+- `job_max_age_days`
 - `request_id`
 - `response_complete`
 - `continuation_used`
@@ -155,18 +159,17 @@ curl -X POST "http://localhost:8000/chat" \
 
 ## 验证
 
-v1.6.0 发布前完成了以下验证：
+v1.7.0 发布前完成了以下验证：
 
 | 检查项 | 结果 |
 |---|---|
-| 完整确定性回归 | 119/119 通过 |
+| 公开基线回归 | 46/46 通过 |
 | Python syntax / import | 通过 |
 | Python 依赖审计 | 未发现已知漏洞 |
 | Docker Compose config | 通过 |
 | Docker image build | 通过 |
 | Docker 服务健康检查 | 5/5 healthy，重启次数为 0 |
 | 应用、Nginx、ChromaDB、Prometheus 在线检查 | HTTP 200 |
-| 职位登记库跨容器恢复 | 通过 |
 
 公开仓库的 CI 会运行公开基线回归、依赖审计、Python 编译检查、Compose 配置检查和凭据模式扫描。
 
@@ -180,7 +183,7 @@ v1.6.0 发布前完成了以下验证：
 
 - 百度公开列表的完整分页方式尚未确认，单页结果不会触发批量停用；
 - 来源目录用于建立覆盖面，尚未验证的站点不会启用自动分页或批量刷新；
-- 职位信息反映最近一次成功更新时的官网状态，投递前仍需打开返回的官方链接确认；
+- 职位信息反映最近一次成功核验时的官网状态；扩大检索窗口会增加旧记录，投递前仍需打开返回的官方链接确认；
 - `/chat` 和 `/search` 尚未实现终端用户身份系统，公网多用户部署需要额外的身份层和 TLS。
 
 这些限制保留在文档中，是为了让职位建议的来源、时效和适用范围可以被检查。
@@ -202,11 +205,12 @@ tools/        持久化备份和恢复验证工具
 
 ## 数据兼容性
 
-v1.6.0 保持现有 API 路径、Redis key、ChromaDB collection 和 CareerProfile Schema 不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径；来源元数据在既有 SQLite registry 中增量扩展，原有来源策略和职位记录保持不变。
+v1.7.0 保持现有 API 路径、Redis key、ChromaDB collection 和 CareerProfile Schema 不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径；审核、时效、来源健康和刷新任务数据通过既有 SQLite registry 增量扩展。
 
 ## 项目文档
 
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v1.7.0 发布说明](RELEASE_NOTES_v1.7.0.md)
 - [Mako v1.6.0 发布说明](RELEASE_NOTES_v1.6.0.md)
 - [Mako v1.5.0 发布说明](RELEASE_NOTES_v1.5.0.md)
 - [Mako v1.4.0 发布说明](RELEASE_NOTES_v1.4.0.md)

@@ -63,6 +63,14 @@ class SecurityConfigurationTests(unittest.TestCase):
             api_main.ChatRequest(message="")
         with self.assertRaises(ValidationError):
             api_main.ChatRequest(message="hello", conv_id="bad\r\nid")
+        self.assertEqual(
+            7,
+            api_main.ChatRequest(message="hello", job_max_age_days=7).job_max_age_days,
+        )
+        with self.assertRaises(ValidationError):
+            api_main.ChatRequest(message="hello", job_max_age_days=0)
+        with self.assertRaises(ValidationError):
+            api_main.ChatRequest(message="hello", job_max_age_days=91)
 
     def test_sensitive_routes_have_admin_dependency(self):
         protected = {
@@ -77,6 +85,12 @@ class SecurityConfigurationTests(unittest.TestCase):
             "/jobs/import/url",
             "/jobs/import/structured",
             "/jobs",
+            "/jobs/review/pending",
+            "/jobs/{job_id}/versions/{version_id}/review",
+            "/jobs/sources/health",
+            "/jobs/tasks",
+            "/jobs/tasks/{task_id}/run",
+            "/jobs/tasks/{task_id}/retry",
             "/eval/run",
         }
         routes = {route.path: route for route in api_main.app.routes}

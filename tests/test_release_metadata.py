@@ -4,12 +4,12 @@ from api.main import BANNER, app
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_fastapi_metadata_reports_v1_6_0(self):
+    def test_fastapi_metadata_reports_v1_7_0(self):
         self.assertEqual("Mako — AI Career Intelligence System", app.title)
-        self.assertEqual("1.6.0", app.version)
+        self.assertEqual("1.7.0", app.version)
 
-    def test_cli_banner_reports_v1_6_0(self):
-        self.assertIn("Mako  v1.6.0", BANNER)
+    def test_cli_banner_reports_v1_7_0(self):
+        self.assertIn("Mako  v1.7.0", BANNER)
 
 
 if __name__ == "__main__":
