@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v1.8.0             ║
+   ║           Mako  v1.9.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -210,7 +210,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="1.8.0",
+    version="1.9.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -909,6 +909,15 @@ class JobReviewInput(BaseModel):
         return notes
 
 
+class JobBatchReviewItem(JobReviewInput):
+    job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    version_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class JobBatchReviewInput(BaseModel):
+    reviews: List[JobBatchReviewItem] = Field(min_length=1, max_length=50)
+
+
 class JobRefreshTaskInput(BaseModel):
     source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     task_type: str = Field(pattern="^(managed_refresh|url_import)$")
@@ -916,8 +925,7 @@ class JobRefreshTaskInput(BaseModel):
     max_attempts: int = Field(default=1, ge=1, le=3)
 
 
-class JobStructuredImportInput(BaseModel):
-    source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+class JobStructuredBatchItem(BaseModel):
     source_url: str = Field(min_length=1, max_length=2000)
     external_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
     title: str = Field(min_length=1, max_length=500)
@@ -950,6 +958,46 @@ class JobStructuredImportInput(BaseModel):
                 normalized.append(clean)
                 seen.add(key)
         return normalized
+
+
+class JobStructuredImportInput(JobStructuredBatchItem):
+    source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class JobStructuredBatchImportInput(BaseModel):
+    source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    postings: List[JobStructuredBatchItem] = Field(min_length=1, max_length=50)
+
+    @field_validator("postings")
+    @classmethod
+    def enforce_total_content_limit(
+        cls, postings: List[JobStructuredBatchItem]
+    ) -> List[JobStructuredBatchItem]:
+        total_bytes = 0
+        scalar_fields = (
+            "source_url",
+            "external_id",
+            "title",
+            "department",
+            "job_category",
+            "recruitment_type",
+            "employment_type",
+            "description",
+        )
+        list_fields = ("locations", "responsibilities", "requirements")
+        for posting in postings:
+            total_bytes += sum(
+                len(str(getattr(posting, field) or "").encode("utf-8"))
+                for field in scalar_fields
+            )
+            total_bytes += sum(
+                len(item.encode("utf-8"))
+                for field in list_fields
+                for item in getattr(posting, field)
+            )
+        if total_bytes > 5 * 1024 * 1024:
+            raise ValueError("job batch content exceeds the 5 MB limit")
+        return postings
 
 
 class DocumentUpdateInput(BaseModel):
@@ -1193,7 +1241,40 @@ async def list_public_job_sources(
         }
         for source in sources
     ]
-    return {"count": len(items), "sources": items}
+    group_definitions = (
+        (
+            "verified_local_data",
+            "当前有已核验职位数据",
+            "已核验职位可用于 Mako 本地检索。",
+        ),
+        (
+            "official_link_only",
+            "当前仅提供官方招聘入口",
+            "保留官方招聘入口，当前不提供本地职位检索。",
+        ),
+    )
+    capability_groups = []
+    for key, label, description in group_definitions:
+        source_refs = [
+            {
+                "source_id": item["source_id"],
+                "company_name": item["company_name"],
+            }
+            for item in items
+            if item.get("data_status", "official_link_only") == key
+        ]
+        capability_groups.append({
+            "key": key,
+            "label": label,
+            "description": description,
+            "count": len(source_refs),
+            "source_refs": source_refs,
+        })
+    return {
+        "count": len(items),
+        "capability_groups": capability_groups,
+        "sources": items,
+    }
 
 
 @app.post(
@@ -1236,6 +1317,26 @@ async def import_structured_job(body: JobStructuredImportInput):
     except KeyError as exc:
         raise HTTPException(404, "job source not found") from exc
     except (SourceSecurityError, ValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post(
+    "/jobs/import/structured/batch",
+    tags=["职位情报"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def import_structured_job_batch(body: JobStructuredBatchImportInput):
+    """Import a bounded batch of official postings into the review queue."""
+    from mcp.knowledge_sources import SourceSecurityError
+
+    try:
+        return _knowledge_base_instance().import_job_posting_batch(
+            body.source_id,
+            [posting.model_dump(exclude_none=True) for posting in body.postings],
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "job source not found") from exc
+    except (SourceSecurityError, ValidationError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
@@ -1294,6 +1395,21 @@ async def review_job_version(job_id: str, version_id: str, body: JobReviewInput)
     except KeyError as exc:
         raise HTTPException(404, "job or job version not found") from exc
     except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post(
+    "/jobs/review/batch",
+    tags=["职位情报"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def review_job_versions_batch(body: JobBatchReviewInput):
+    """Apply explicit decisions to a prevalidated batch of pending versions."""
+    try:
+        return _knowledge_base_instance().review_job_versions_batch(
+            [review.model_dump() for review in body.reviews]
+        )
+    except (KeyError, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 

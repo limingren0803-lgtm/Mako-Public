@@ -1040,6 +1040,60 @@ class KnowledgeRegistry:
         result["decision"] = decision
         return result
 
+    def review_job_versions_batch(
+        self,
+        reviews: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Preflight and apply explicit decisions for a bounded review batch."""
+        if not reviews:
+            raise ValueError("job review batch must contain at least one decision")
+        if len(reviews) > 50:
+            raise ValueError("job review batch exceeds the 50-decision limit")
+
+        seen = set()
+        with self._lock, self._connection() as connection:
+            for index, review in enumerate(reviews):
+                job_id = str(review.get("job_id") or "")
+                version_id = str(review.get("version_id") or "")
+                decision = str(review.get("decision") or "")
+                key = (job_id, version_id)
+                if key in seen:
+                    raise ValueError(f"job review batch item {index} is duplicated")
+                seen.add(key)
+                if decision not in {"approved", "rejected"}:
+                    raise ValueError(f"job review batch item {index} has an invalid decision")
+                pending = connection.execute(
+                    """
+                    SELECT 1
+                    FROM job_versions v
+                    JOIN job_postings j ON j.job_id = v.job_id
+                    WHERE v.job_id = ? AND v.job_version_id = ?
+                      AND v.review_status = 'pending'
+                      AND v.validation_status = 'staged'
+                      AND j.pending_version_id = v.job_version_id
+                    """,
+                    (job_id, version_id),
+                ).fetchone()
+                if not pending:
+                    raise ValueError(f"job review batch item {index} is not pending")
+
+        results = [
+            self.review_job_version(
+                job_id=review["job_id"],
+                version_id=review["version_id"],
+                decision=review["decision"],
+                notes=review.get("notes"),
+            )
+            for review in reviews
+        ]
+        approved = sum(1 for result in results if result["decision"] == "approved")
+        return {
+            "submitted": len(results),
+            "approved": approved,
+            "rejected": len(results) - approved,
+            "items": results,
+        }
+
     def list_job_postings(
         self,
         *,

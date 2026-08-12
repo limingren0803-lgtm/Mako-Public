@@ -56,7 +56,7 @@ Career profile contents and raw intent-learning messages are not written to appl
 
 ## Official recruitment sources
 
-The built-in catalog is limited to verified company recruitment domains for Tencent, Huawei, ByteDance, Meituan, and Baidu. Social platforms, recruitment aggregators, forums, and unverified domains are not included.
+The built-in catalog covers 23 verified company recruitment domains across internet platforms, telecommunications, smart hardware, automotive, new-energy, software, industrial manufacturing, consumer goods, professional services, and financial services. Baidu, SAP, and Microsoft are representative page-level adapter cases; catalog coverage and page-level retrieval remain separate capabilities, and each company is evaluated against its own official site structure and access boundaries. Social platforms, recruitment aggregators, forums, and unverified domains are not included.
 
 Registering a source does not fetch it. Automated retrieval starts disabled and requires an authenticated policy change. Operators are responsible for confirming company ownership before registering another domain. Retrieval is limited to the registered HTTPS domain and approved delegated domains, with checks for DNS and peer addresses, redirects, robots policies, response type, response size, and common instruction-injection patterns.
 

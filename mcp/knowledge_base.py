@@ -404,6 +404,11 @@ class KnowledgeBase:
             notes=notes,
         )
 
+    def review_job_versions_batch(
+        self, reviews: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        return self._registry.review_job_versions_batch(reviews)
+
     def update_job_freshness(self) -> Dict[str, int]:
         return self._registry.update_job_freshness()
 
@@ -450,6 +455,17 @@ class KnowledgeBase:
             registry=self._registry,
             source_id=source_id,
             payload=payload,
+        )
+
+    def import_job_posting_batch(
+        self, source_id: str, payloads: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        from mcp.job_pipeline import import_job_posting_batch
+
+        return import_job_posting_batch(
+            registry=self._registry,
+            source_id=source_id,
+            payloads=payloads,
         )
 
     def search_job_postings(

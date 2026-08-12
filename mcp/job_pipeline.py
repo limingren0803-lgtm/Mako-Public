@@ -52,6 +52,12 @@ def ingest_job_html(
     )
     if not page.postings and page.total is None:
         raise JobAdapterError("official page did not expose supported structured job data")
+    for posting in page.postings:
+        flags = find_instruction_injection(posting.to_search_text())
+        if flags:
+            raise SourceSecurityError(
+                "job content failed instruction isolation checks: " + ",".join(flags)
+            )
     changed = 0
     unchanged = 0
     job_ids: List[str] = []
@@ -94,15 +100,13 @@ def _assert_import_enabled(source: Dict[str, Any]) -> None:
         raise SourceSecurityError("job import is not enabled for this directory-only source")
 
 
-def import_job_posting(
+def _validate_job_posting(
     *,
-    registry: Any,
+    source: Dict[str, Any],
     source_id: str,
     payload: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Store one operator-supplied JD after source and content validation."""
-    source = _active_source(registry, source_id)
-    _assert_import_enabled(source)
+) -> JobPosting:
+    """Normalize one operator-supplied posting without changing registry state."""
     source_url = str(payload.get("source_url") or "").strip()
     allowed_domains = [source["official_domain"], *source.get("delegated_domains", [])]
     validate_source_url(source_url, allowed_domains)
@@ -119,21 +123,113 @@ def import_job_posting(
         raise SourceSecurityError(
             "job content failed instruction isolation checks: " + ",".join(flags)
         )
+    return posting
 
+
+def _store_pending_job_posting(
+    *,
+    registry: Any,
+    source_id: str,
+    posting: JobPosting,
+    event_action: str,
+) -> Dict[str, Any]:
     result = registry.upsert_job_posting(posting, review_status="pending")
     outcome = "changed" if result["changed"] else "unchanged"
     JOB_POSTINGS_INGESTED_TOTAL.labels(source_id, outcome).inc()
     registry.record_event(
-        "job_manual_import",
+        event_action,
         "job_posting",
         result["job_id"],
         "success",
         {"source_id": source_id, "result": outcome},
     )
+    return result
+
+
+def import_job_posting(
+    *,
+    registry: Any,
+    source_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Store one operator-supplied JD after source and content validation."""
+    source = _active_source(registry, source_id)
+    _assert_import_enabled(source)
+    posting = _validate_job_posting(
+        source=source,
+        source_id=source_id,
+        payload=payload,
+    )
+    result = _store_pending_job_posting(
+        registry=registry,
+        source_id=source_id,
+        posting=posting,
+        event_action="job_manual_import",
+    )
     return {
         **result,
         "source_id": source_id,
         "import_method": "structured_manual",
+    }
+
+
+def import_job_posting_batch(
+    *,
+    registry: Any,
+    source_id: str,
+    payloads: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Validate and stage a bounded batch from one registered official source."""
+    if not payloads:
+        raise ValueError("job batch must contain at least one posting")
+    if len(payloads) > 50:
+        raise ValueError("job batch exceeds the 50-posting limit")
+
+    source = _active_source(registry, source_id)
+    _assert_import_enabled(source)
+    postings: List[JobPosting] = []
+    seen_external_ids = set()
+    for index, payload in enumerate(payloads):
+        try:
+            posting = _validate_job_posting(
+                source=source,
+                source_id=source_id,
+                payload=payload,
+            )
+        except Exception as exc:
+            raise ValueError(f"job batch item {index} failed validation: {exc}") from exc
+        if posting.external_id in seen_external_ids:
+            raise ValueError(
+                f"job batch item {index} duplicates external_id {posting.external_id}"
+            )
+        seen_external_ids.add(posting.external_id)
+        postings.append(posting)
+
+    results = [
+        _store_pending_job_posting(
+            registry=registry,
+            source_id=source_id,
+            posting=posting,
+            event_action="job_batch_import",
+        )
+        for posting in postings
+    ]
+    changed = sum(1 for result in results if result["changed"])
+    registry.record_event(
+        "job_batch_import_completed",
+        "source",
+        source_id,
+        "success",
+        {"submitted": len(results), "changed": changed, "unchanged": len(results) - changed},
+    )
+    return {
+        "source_id": source_id,
+        "import_method": "structured_batch",
+        "review_status": "pending",
+        "submitted": len(results),
+        "changed": changed,
+        "unchanged": len(results) - changed,
+        "items": results,
     }
 
 

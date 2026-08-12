@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Type
+from urllib.parse import urljoin
 
 from core.job_posting import JobPosting, RecruitmentType
 from mcp.knowledge_source_catalog import OFFICIAL_CAREER_SOURCES_CN
@@ -83,6 +84,140 @@ def _visible_text(value: Any) -> str:
     parser = _VisibleTextExtractor()
     parser.feed(unescape(str(value or "")))
     return " ".join(parser.parts)
+
+
+class _SapJobListExtractor(HTMLParser):
+    """Read public job links and locations from SAP's rendered results table."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.entries: Dict[str, Dict[str, str]] = {}
+        self.order: List[str] = []
+        self._last_href: Optional[str] = None
+        self._title_href: Optional[str] = None
+        self._title_parts: List[str] = []
+        self._location_href: Optional[str] = None
+        self._location_parts: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[no-untyped-def]
+        attributes = {str(key).lower(): str(value) for key, value in attrs if value}
+        classes = set(attributes.get("class", "").split())
+        if tag.lower() == "a" and "jobTitle-link" in classes:
+            href = attributes.get("href", "").strip()
+            if href:
+                if href not in self.entries:
+                    self.entries[href] = {"href": href, "title": "", "location": ""}
+                    self.order.append(href)
+                self._last_href = href
+                self._title_href = href
+                self._title_parts = []
+        elif tag.lower() == "span" and "jobLocation" in classes and self._last_href:
+            self._location_href = self._last_href
+            self._location_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._title_href:
+            title = " ".join("".join(self._title_parts).split())
+            if title:
+                self.entries[self._title_href]["title"] = title
+            self._title_href = None
+            self._title_parts = []
+        elif tag.lower() == "span" and self._location_href:
+            location = " ".join("".join(self._location_parts).split())
+            if location:
+                self.entries[self._location_href]["location"] = location
+            self._location_href = None
+            self._location_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._title_href:
+            self._title_parts.append(data)
+        if self._location_href:
+            self._location_parts.append(data)
+
+    def results(self) -> List[Dict[str, str]]:
+        return [self.entries[href] for href in self.order]
+
+
+class _MicrosoftJobCardExtractor(HTMLParser):
+    """Read the rendered job cards on Microsoft's public location pages."""
+
+    _CARD_COLUMNS = {"column", "columnTwo", "columnThree"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.entries: List[Dict[str, str]] = []
+        self.total: Optional[int] = None
+        self._card: Optional[Dict[str, str]] = None
+        self._card_depth = 0
+        self._capture: Optional[str] = None
+        self._capture_tag: Optional[str] = None
+        self._parts: List[str] = []
+
+    def _begin_capture(self, field: str, tag: str) -> None:
+        self._capture = field
+        self._capture_tag = tag
+        self._parts = []
+
+    def _finish_card(self) -> None:
+        if self._card and self._card.get("href") and self._card.get("title"):
+            self.entries.append(self._card)
+        self._card = None
+        self._card_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[no-untyped-def]
+        attributes = {str(key).lower(): str(value) for key, value in attrs if value}
+        classes = set(attributes.get("class", "").split())
+        lower_tag = tag.lower()
+        if (
+            lower_tag == "div"
+            and "careers-joblistResponsive-columnList" in classes
+            and classes.intersection(self._CARD_COLUMNS)
+        ):
+            if self._card:
+                self._finish_card()
+            self._card = {"href": "", "title": "", "location": "", "published_at": ""}
+            self._card_depth = 1
+            return
+        if self._card and lower_tag == "div":
+            self._card_depth += 1
+        if self._card:
+            if lower_tag == "h3" and "careers-joblistResponsive-subheading" in classes:
+                self._begin_capture("title", lower_tag)
+            elif lower_tag == "div" and "careers-joblistResponsive-postdate" in classes:
+                self._begin_capture("published_at", lower_tag)
+            elif lower_tag == "div" and "careers-joblistResponsive-primarylocation" in classes:
+                self._begin_capture("location", lower_tag)
+            elif lower_tag == "a" and "careers-joblistResponsive-button" in classes:
+                self._card["href"] = attributes.get("href", "").strip()
+        elif lower_tag == "h3" and attributes.get("id") == "jobCount":
+            self._begin_capture("total", lower_tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        lower_tag = tag.lower()
+        if self._capture and lower_tag == self._capture_tag:
+            value = " ".join("".join(self._parts).split())
+            if self._capture == "total":
+                match = re.search(r"\d+", value)
+                self.total = int(match.group()) if match else None
+            elif self._card is not None:
+                self._card[self._capture] = value
+            self._capture = None
+            self._capture_tag = None
+            self._parts = []
+        if self._card and lower_tag == "div":
+            self._card_depth -= 1
+            if self._card_depth == 0:
+                self._finish_card()
+
+    def handle_data(self, data: str) -> None:
+        if self._capture:
+            self._parts.append(data)
+
+    def results(self) -> List[Dict[str, str]]:
+        if self._card:
+            self._finish_card()
+        return self.entries
 
 
 def _optional_int(value: Any) -> Optional[int]:
@@ -411,6 +546,113 @@ class BaiduJobAdapter(JsonLdJobAdapter):
         )
 
 
+class SapJobAdapter(JsonLdJobAdapter):
+    source_id = "src_cn_sap"
+
+    def parse_page(
+        self,
+        *,
+        html: str,
+        source_url: str,
+        context: JobAdapterContext,
+    ) -> JobAdapterResult:
+        if context.source_id != self.source_id:
+            raise JobAdapterError("adapter does not match the registered source")
+        validate_source_url(source_url, context.allowed_domains)
+        parser = _SapJobListExtractor()
+        parser.feed(html)
+        entries = parser.results()
+        if not entries:
+            return super().parse_page(html=html, source_url=source_url, context=context)
+        fetched_at = context.fetched_at or datetime.now(timezone.utc)
+        postings: List[JobPosting] = []
+        for entry in entries:
+            title = entry["title"]
+            match = re.search(r"/(\d+)/?$", entry["href"])
+            if not title or not match:
+                continue
+            job_url = urljoin(source_url, entry["href"])
+            validate_source_url(job_url, context.allowed_domains)
+            locations = [entry["location"]] if entry["location"] else []
+            postings.append(
+                JobPosting(
+                    source_id=context.source_id,
+                    external_id=match.group(1),
+                    company_name=context.company_name,
+                    title=title,
+                    recruitment_type=_recruitment_type({"title": title}),
+                    locations=locations,
+                    source_url=job_url,
+                    fetched_at=fetched_at,
+                )
+            )
+
+        pagination = re.search(
+            r"Results\s+(\d+)\s*[–-]\s*(\d+)\s+of\s+(\d+)\s+Page\s+(\d+)\s+of\s+(\d+)",
+            _visible_text(html),
+            re.IGNORECASE,
+        )
+        page_number = int(pagination.group(4)) if pagination else None
+        total = int(pagination.group(3)) if pagination else None
+        total_pages = int(pagination.group(5)) if pagination else None
+        return JobAdapterResult(
+            postings=postings,
+            page_number=page_number,
+            page_size=len(postings),
+            total=total,
+            complete_snapshot=bool(total_pages == 1 and total == len(postings)),
+        )
+
+
+class MicrosoftJobAdapter(JsonLdJobAdapter):
+    source_id = "src_cn_microsoft"
+
+    def parse_page(
+        self,
+        *,
+        html: str,
+        source_url: str,
+        context: JobAdapterContext,
+    ) -> JobAdapterResult:
+        if context.source_id != self.source_id:
+            raise JobAdapterError("adapter does not match the registered source")
+        validate_source_url(source_url, context.allowed_domains)
+        parser = _MicrosoftJobCardExtractor()
+        parser.feed(html)
+        entries = parser.results()
+        if not entries:
+            return super().parse_page(html=html, source_url=source_url, context=context)
+        fetched_at = context.fetched_at or datetime.now(timezone.utc)
+        postings: List[JobPosting] = []
+        seen = set()
+        for entry in entries:
+            job_url = urljoin(source_url, entry["href"])
+            match = re.search(r"/careers/job/(\d+)", job_url)
+            if not match or match.group(1) in seen:
+                continue
+            validate_source_url(job_url, context.allowed_domains)
+            seen.add(match.group(1))
+            postings.append(
+                JobPosting(
+                    source_id=context.source_id,
+                    external_id=match.group(1),
+                    company_name=context.company_name,
+                    title=entry["title"],
+                    recruitment_type=_recruitment_type({"title": entry["title"]}),
+                    locations=[entry["location"]] if entry["location"] else [],
+                    published_at=entry["published_at"] or None,
+                    source_url=job_url,
+                    fetched_at=fetched_at,
+                )
+            )
+        return JobAdapterResult(
+            postings=postings,
+            page_size=len(postings),
+            total=parser.total,
+            complete_snapshot=bool(parser.total is not None and parser.total == len(postings)),
+        )
+
+
 ADAPTER_TYPES: Dict[str, Type[JsonLdJobAdapter]] = {
     adapter.source_id: adapter
     for adapter in (
@@ -419,6 +661,8 @@ ADAPTER_TYPES: Dict[str, Type[JsonLdJobAdapter]] = {
         ByteDanceJobAdapter,
         MeituanJobAdapter,
         BaiduJobAdapter,
+        SapJobAdapter,
+        MicrosoftJobAdapter,
     )
 }
 
