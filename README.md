@@ -6,6 +6,14 @@ Mako 是一个面向求职场景的多 Agent 系统，重点服务计划回国�
 
 当前稳定版本为 v1.9.0。仓库包含可运行代码、公开基线测试和本地部署文档。
 
+## 求职工作台
+
+Mako 提供面向求职用户的 Web 工作台，将六项 Career Skill 分为背景诊断、方向匹配、JD 分析、简历优化、面试准备和行动规划。每个板块采用一致的四步流程：选择功能、提供材料、确认输入、查看结果。
+
+工作台支持直接输入问题，也可以读取 UTF-8 编码的 `.txt` 或 `.md` 材料，用于提交简历文本、JD 或经历说明。文件文本随本次 `/chat` 请求处理，不会作为知识文档导入。当前页面未接入 PDF、DOCX、用户账户或管理接口。
+
+![Mako 求职工作台](docs/images/mako-workspace.png)
+
 ## 适用场景
 
 - 梳理海外教育和项目经历，识别适合国内招聘市场的岗位方向；
@@ -124,6 +132,7 @@ ENABLE_SWAGGER_UI=true
 
 | 地址 | 用途 |
 |---|---|
+| `http://localhost/mako/` | Mako 求职工作台 |
 | `http://localhost:8000/docs` | Swagger UI，需启用 `ENABLE_SWAGGER_UI` |
 | `http://localhost:8000/health` | 应用健康和 Agent 统计 |
 | `http://localhost:8000/skills` | Skill 加载摘要，需 `X-Admin-Key` |
@@ -213,6 +222,7 @@ monitor/      运行监控
 evaluation/   意图与对话评测
 tests/        公开基线回归与安全边界测试
 tools/        持久化备份和恢复验证工具
+ui/           求职工作台、交互脚本和品牌图标
 ```
 
 ## 数据兼容性

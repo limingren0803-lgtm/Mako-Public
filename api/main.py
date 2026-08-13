@@ -25,7 +25,8 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request as FastAPIRequest, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -226,6 +227,10 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+_ui_dir = pathlib.Path(_ROOT) / "ui"
+app.mount("/app", StaticFiles(directory=_ui_dir, html=True), name="mako-ui")
+app.mount("/mako", StaticFiles(directory=_ui_dir, html=True), name="mako-branded-ui")
+
 
 def _http_request_id(request: FastAPIRequest) -> str:
     """Return the validated request ID created by middleware."""
@@ -382,6 +387,11 @@ class ChatResponse(BaseModel):
 
 
 # ── 路由 ──────────────────────────────────────────────────────────────────────
+@app.get("/", include_in_schema=False)
+async def ui_entry():
+    return RedirectResponse(url="/mako/", status_code=307)
+
+
 @app.get("/health")
 async def health():
     if _orchestrator is None:

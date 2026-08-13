@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Mako 求职工作台">
+  <title>Mako — AI Career Intelligence System</title>
+  <link rel="icon" type="image/png" href="/mako/assets/mako-favicon.png">
+  <link rel="stylesheet" href="/mako/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/mako/" aria-label="Mako 首页">
+      <span class="brand-mark"><img src="/mako/assets/mako-icon.png" alt=""></span>
+      <span><strong>Mako</strong><small>AI Career Intelligence System</small></span>
+    </a>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar" aria-label="功能导航">
+      <p class="eyebrow">求职流程</p>
+      <nav id="skill-nav">
+        <button class="nav-item active" data-skill="career_profile"><span>01</span><b>背景诊断</b><small>整理经历与能力边界</small></button>
+        <button class="nav-item" data-skill="career_match"><span>02</span><b>方向匹配</b><small>判断岗位方向与差距</small></button>
+        <button class="nav-item" data-skill="career_jd"><span>03</span><b>JD 分析</b><small>拆解要求与证据需求</small></button>
+        <button class="nav-item" data-skill="career_resume"><span>04</span><b>简历优化</b><small>基于事实调整表达</small></button>
+        <button class="nav-item" data-skill="career_interview"><span>05</span><b>面试准备</b><small>围绕目标岗位准备回答</small></button>
+        <button class="nav-item" data-skill="career_planning"><span>06</span><b>行动规划</b><small>生成可执行求职计划</small></button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <section class="flow" aria-label="当前处理流程">
+        <div class="flow-step current" data-flow-step="1"><span>1</span><b>选择功能</b></div>
+        <div class="flow-line"></div>
+        <div class="flow-step" data-flow-step="2"><span>2</span><b>提供材料</b></div>
+        <div class="flow-line"></div>
+        <div class="flow-step" data-flow-step="3"><span>3</span><b>确认输入</b></div>
+        <div class="flow-line"></div>
+        <div class="flow-step" data-flow-step="4"><span>4</span><b>查看结果</b></div>
+      </section>
+
+      <section class="intro">
+        <p class="eyebrow" id="skill-code">CAREER PROFILE</p>
+        <h1 id="skill-title">背景诊断</h1>
+        <p id="skill-description">整理教育、项目、实习和技能信息，识别已经有证据支持的优势与仍需补充的部分。</p>
+      </section>
+
+      <div class="content-grid">
+        <section class="card input-card">
+          <div class="card-heading"><div><p class="eyebrow">INPUT</p><h2>提供本次分析材料</h2></div><span class="required">至少填写一项</span></div>
+
+          <label for="request">你希望 Mako 解决什么问题</label>
+          <textarea id="request" maxlength="12000" placeholder="例如：请分析我的背景更适合哪些数据分析方向，并指出目前证据不足的部分。"></textarea>
+          <div class="counter"><span id="request-count">0</span> / 12000</div>
+
+          <div class="upload-zone">
+            <input id="material-file" type="file" accept=".txt,.md,text/plain,text/markdown">
+            <label for="material-file"><b>上传 TXT 或 Markdown 材料</b><span>可上传简历文本、JD 或经历说明；提交后将作为本次分析输入发送</span></label>
+            <button id="clear-file" class="text-button" type="button" hidden>移除</button>
+          </div>
+          <p id="file-status" class="hint">当前支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符。PDF 与 DOCX 暂未接入。</p>
+
+          <details class="advanced">
+            <summary>岗位信息与分析范围</summary>
+            <div class="form-row">
+              <div><label for="job-age">岗位时效</label><select id="job-age"><option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option></select></div>
+              <div><label for="job-mode">信息不足时</label><select id="job-mode"><option value="verified_only">只使用已核验岗位</option><option value="official_links_if_missing">提供官方招聘入口</option></select></div>
+            </div>
+          </details>
+
+          <label class="confirm"><input id="confirm-input" type="checkbox"><span>我已检查上述材料，同意将其用于本次分析。</span></label>
+          <div class="actions"><button id="submit" class="primary" type="button">开始背景诊断</button><span id="submit-status" role="status"></span></div>
+        </section>
+
+        <aside class="right-column">
+          <section class="card guide-card">
+            <p class="eyebrow">GUIDE</p><h2>这个板块会做什么</h2>
+            <ol id="skill-guide"><li>整理用户明确提供的经历</li><li>区分事实、推断与缺失信息</li><li>给出下一步补充建议</li></ol>
+          </section>
+          <section class="card output-card" id="output-card">
+            <p class="eyebrow">OUTPUT</p><h2>分析结果</h2>
+            <div id="empty-output" class="empty">完成材料确认后，结果会显示在这里。</div>
+            <div id="result" class="result" hidden></div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <script src="/mako/app.js" defer></script>
+</body>
+</html>
