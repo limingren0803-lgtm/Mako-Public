@@ -389,6 +389,19 @@ class KnowledgeBase:
     ) -> List[Dict[str, Any]]:
         return self._registry.list_pending_job_versions(source_id=source_id, limit=limit)
 
+    def get_current_approved_job_version(
+        self,
+        *,
+        job_id: str,
+        version_id: str,
+        max_age_days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        return self._registry.get_current_approved_job_version(
+            job_id=job_id,
+            version_id=version_id,
+            max_age_days=max_age_days,
+        )
+
     def review_job_version(
         self,
         *,

@@ -11,8 +11,8 @@ import pathlib
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Literal, Optional
 
 
 _ROOT = str(pathlib.Path(__file__).parent.parent.resolve())
@@ -33,6 +33,33 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core.security import cors_origins, env_bool, require_admin_key, validate_identifier
 from core.config import env_int_with_legacy, env_with_legacy
+from core.v2_evidence import (
+    EvidenceFactStatus,
+    EvidenceRecord,
+    EvidenceStrength,
+    EvidenceType,
+    JDRequirement,
+    JDRequirementReview,
+    MatchDecision,
+    RequirementExtractionStatus,
+    UserConfirmation,
+)
+from core.v2_evidence_registry import (
+    EvidenceConflictError,
+    EvidenceReferenceError,
+    EvidenceRegistry,
+    RequirementConflictError,
+    RequirementReferenceError,
+)
+from core.v2_job_match import JobMatchBoundaryError, match_approved_job
+from core.v2_matching import term_present
+from core.v2_match_summary import (
+    MatchSummary,
+    RequirementMatchItem,
+    pair_match_results,
+    summarize_match_decisions,
+)
+from core.v2_requirements import RequirementReviewError, extract_requirement_drafts
 
 load_dotenv()
 
@@ -45,7 +72,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v1.9.0             ║
+   ║           Mako  v2.0.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -59,6 +86,7 @@ _tool_manager = None
 _monitor      = None
 _evaluator    = None
 _skill_manager = None
+_evidence_registry = None
 
 def _anthropic_cfg() -> Dict[str, Any]:
     key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -76,7 +104,7 @@ def _anthropic_cfg() -> Dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager
+    global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager, _evidence_registry
 
     print(BANNER, flush=True)
 
@@ -150,6 +178,12 @@ async def lifespan(app: FastAPI):
         ),
     )
     logger.info(f"知识库已加载: {kb.doc_count} 个文档片段")
+    _evidence_registry = EvidenceRegistry(
+        os.getenv(
+            "MAKO_EVIDENCE_REGISTRY_PATH",
+            "/app/data/knowledge/evidence.sqlite3",
+        )
+    )
 
     def knowledge_fallback(params: Dict[str, Any], context: Optional[Dict[str, Any]], error: str):
         query = params.get("query", "")
@@ -211,7 +245,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="1.9.0",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -384,6 +418,152 @@ class ChatResponse(BaseModel):
     response_complete: bool = True
     continuation_used: bool = False
     quality_flags: List[str] = Field(default_factory=list)
+
+
+class V2JobMatchInput(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    requirement_ids: List[str] = Field(min_length=1, max_length=50)
+    evidence_ids: List[str] = Field(min_length=1, max_length=100)
+    job_max_age_days: int = Field(default=30, ge=1, le=90)
+
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, value: str) -> str:
+        return validate_identifier(value, "user_id")
+
+    @field_validator("requirement_ids")
+    @classmethod
+    def normalize_requirement_ids(
+        cls,
+        values: List[str],
+    ) -> List[str]:
+        normalized: List[str] = []
+        for value in values:
+            requirement_id = EvidenceRecord._validate_identifier(value)
+            if requirement_id not in normalized:
+                normalized.append(requirement_id)
+        return normalized
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def normalize_evidence_ids(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for value in values:
+            evidence_id = EvidenceRecord._validate_identifier(value)
+            if evidence_id not in normalized:
+                normalized.append(evidence_id)
+        return normalized
+
+
+class V2JobMatchResponse(BaseModel):
+    job_id: str
+    job_version_id: str
+    company_name: str
+    title: str
+    source_url: str
+    reviewed_at: Optional[str] = None
+    last_verified_at: Optional[str] = None
+    job_max_age_days: int
+    evidence_count: int
+    summary: MatchSummary
+    items: List[RequirementMatchItem]
+    decisions: List[MatchDecision]
+
+
+class V2RequirementExtractionInput(BaseModel):
+    job_max_age_days: int = Field(default=30, ge=1, le=90)
+
+
+class V2RequirementListResponse(BaseModel):
+    job_id: str
+    job_version_id: str
+    count: int
+    items: List[JDRequirement]
+
+
+class V2WorkspaceJobOption(BaseModel):
+    job_id: str
+    job_version_id: str
+    source_id: str
+    company_name: str
+    title: str
+    locations: List[str] = Field(default_factory=list)
+    source_url: str
+    last_verified_at: str
+    requirement_count: int = 0
+    match_ready: bool = False
+
+
+class V2WorkspaceJobListResponse(BaseModel):
+    count: int
+    items: List[V2WorkspaceJobOption]
+
+
+class V2WorkspaceMatchInput(BaseModel):
+    requirement_ids: List[str] = Field(min_length=1, max_length=50)
+    requirement_terms: Dict[str, List[str]] = Field(default_factory=dict)
+    evidence: List[str] = Field(min_length=1, max_length=20)
+    material_confirmed: Literal[True]
+    job_max_age_days: int = Field(default=30, ge=1, le=90)
+
+    @field_validator("requirement_ids")
+    @classmethod
+    def normalize_workspace_requirement_ids(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for value in values:
+            requirement_id = EvidenceRecord._validate_identifier(value)
+            if requirement_id not in normalized:
+                normalized.append(requirement_id)
+        return normalized
+
+    @field_validator("requirement_terms")
+    @classmethod
+    def normalize_workspace_requirement_terms(
+        cls,
+        values: Dict[str, List[str]],
+    ) -> Dict[str, List[str]]:
+        if len(values) > 50:
+            raise ValueError("too many requirement term groups")
+        normalized: Dict[str, List[str]] = {}
+        for key, raw_terms in values.items():
+            requirement_id = EvidenceRecord._validate_identifier(key)
+            if len(raw_terms) > 20:
+                raise ValueError("too many terms for one requirement")
+            terms: List[str] = []
+            for value in raw_terms:
+                term = " ".join(value.split()).casefold()
+                if len(term) > 200:
+                    raise ValueError("requirement term exceeds 200 characters")
+                if term and term not in terms:
+                    terms.append(term)
+            if terms:
+                normalized[requirement_id] = terms
+        return normalized
+
+    @field_validator("evidence")
+    @classmethod
+    def normalize_workspace_evidence(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        total = 0
+        for value in values:
+            claim = " ".join(value.split())
+            if not claim:
+                continue
+            if len(claim) > 4_000:
+                raise ValueError("one evidence item exceeds 4000 characters")
+            total += len(claim)
+            if total > 20_000:
+                raise ValueError("evidence exceeds 20000 characters in total")
+            if claim not in normalized:
+                normalized.append(claim)
+        if not normalized:
+            raise ValueError("at least one evidence item is required")
+        return normalized
+
+
+class V2WorkspaceMatchResponse(V2JobMatchResponse):
+    confirmation_scope: Literal["request"] = "request"
+    evidence_persisted: Literal[False] = False
 
 
 # ── 路由 ──────────────────────────────────────────────────────────────────────
@@ -790,6 +970,522 @@ async def debug_profile(user_id: str):
 async def prometheus_metrics():
     """Prometheus 指标入口。"""
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def _v2_evidence_registry() -> EvidenceRegistry:
+    if _evidence_registry is None:
+        raise HTTPException(503, "V2 证据库未初始化")
+    return _evidence_registry
+
+
+def _v2_workspace_job_version(
+    job_id: str,
+    version_id: str,
+    *,
+    max_age_days: int,
+) -> Dict[str, Any]:
+    try:
+        job_id = EvidenceRecord._validate_identifier(job_id)
+        version_id = EvidenceRecord._validate_identifier(version_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    job_version = _knowledge_base_instance().get_current_approved_job_version(
+        job_id=job_id,
+        version_id=version_id,
+        max_age_days=max_age_days,
+    )
+    if not job_version:
+        raise HTTPException(404, "current approved job version not found")
+    return job_version
+
+
+@app.get(
+    "/v2/workspace/jobs",
+    response_model=V2WorkspaceJobListResponse,
+    tags=["V2 工作台"],
+)
+async def list_v2_workspace_jobs(
+    query: Optional[str] = Query(default=None, max_length=200),
+    source_id: Optional[str] = Query(default=None, max_length=128),
+    max_age_days: int = Query(default=30, ge=1, le=90),
+    match_ready_only: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=50),
+):
+    """List safe fields for current approved jobs without refreshing a source."""
+    if source_id is not None:
+        try:
+            source_id = EvidenceRecord._validate_identifier(source_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    query_text = " ".join((query or "").split()).casefold()
+    items: List[V2WorkspaceJobOption] = []
+    jobs = _knowledge_base_instance().list_job_postings(
+        source_id=source_id,
+        status="active",
+        limit=500,
+    )
+    for job in jobs:
+        version_id = str(job.get("current_version_id") or "")
+        if not version_id or job.get("review_status") != "approved":
+            continue
+        verified_value = job.get("last_verified_at")
+        try:
+            verified_at = datetime.fromisoformat(
+                str(verified_value).replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError):
+            continue
+        if verified_at.tzinfo is None:
+            verified_at = verified_at.replace(tzinfo=timezone.utc)
+        if verified_at < cutoff:
+            continue
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        expires_value = job.get("expires_at") or payload.get("valid_through")
+        if expires_value:
+            try:
+                expires_at = datetime.fromisoformat(
+                    str(expires_value).replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= datetime.now(timezone.utc):
+                continue
+        company_name = str(payload.get("company_name") or job.get("company_name") or "")
+        title = str(payload.get("title") or job.get("title") or "")
+        locations = [
+            str(value) for value in payload.get("locations", []) if str(value).strip()
+        ]
+        searchable = " ".join([company_name, title, *locations]).casefold()
+        if query_text and query_text not in searchable:
+            continue
+        reviewed_requirements = [
+            item
+            for item in _v2_evidence_registry().list_reviewed_requirements(version_id)
+            if item.extraction_status == RequirementExtractionStatus.PARSED
+        ]
+        try:
+            drafts = extract_requirement_drafts(
+                {
+                    "job_version_id": version_id,
+                    "payload": payload,
+                }
+            )
+        except RequirementReviewError:
+            drafts = []
+        requirement_count = len({
+            item.requirement_id
+            for item in [*drafts, *reviewed_requirements]
+        })
+        if match_ready_only and not requirement_count:
+            continue
+        items.append(
+            V2WorkspaceJobOption(
+                job_id=str(job["job_id"]),
+                job_version_id=version_id,
+                source_id=str(job["source_id"]),
+                company_name=company_name,
+                title=title,
+                locations=locations,
+                source_url=str(job.get("source_url") or payload.get("source_url") or ""),
+                last_verified_at=verified_at.isoformat(),
+                requirement_count=requirement_count,
+                match_ready=bool(requirement_count),
+            )
+        )
+        if len(items) >= limit:
+            break
+    return V2WorkspaceJobListResponse(count=len(items), items=items)
+
+
+@app.get(
+    "/v2/workspace/jobs/{job_id}/versions/{version_id}/requirements",
+    response_model=V2RequirementListResponse,
+    tags=["V2 工作台"],
+)
+async def list_v2_workspace_job_requirements(
+    job_id: str,
+    version_id: str,
+    max_age_days: int = Query(default=30, ge=1, le=90),
+):
+    """Return exact JD drafts and any reviewed state for one current job version."""
+    job_version = _v2_workspace_job_version(
+        job_id,
+        version_id,
+        max_age_days=max_age_days,
+    )
+    reviewed = {
+        item.requirement_id: item
+        for item in _v2_evidence_registry().list_reviewed_requirements(version_id)
+        if item.extraction_status == RequirementExtractionStatus.PARSED
+    }
+    try:
+        drafts = extract_requirement_drafts(job_version)
+    except RequirementReviewError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    items = [
+        reviewed.get(item.requirement_id, item)
+        for item in drafts
+    ]
+    items.extend(
+        item
+        for requirement_id, item in reviewed.items()
+        if requirement_id not in {draft.requirement_id for draft in drafts}
+    )
+    return V2RequirementListResponse(
+        job_id=job_id,
+        job_version_id=version_id,
+        count=len(items),
+        items=items,
+    )
+
+
+@app.post(
+    "/v2/workspace/jobs/{job_id}/versions/{version_id}/match",
+    response_model=V2WorkspaceMatchResponse,
+    tags=["V2 工作台"],
+)
+async def match_v2_workspace_job(
+    job_id: str,
+    version_id: str,
+    body: V2WorkspaceMatchInput,
+):
+    """Run one confirmed, request-local match without persisting user material."""
+    job_version = _v2_workspace_job_version(
+        job_id,
+        version_id,
+        max_age_days=body.job_max_age_days,
+    )
+    reviewed = {
+        item.requirement_id: item
+        for item in _v2_evidence_registry().list_reviewed_requirements(version_id)
+        if item.extraction_status == RequirementExtractionStatus.PARSED
+    }
+    try:
+        drafts = {
+            item.requirement_id: item
+            for item in extract_requirement_drafts(job_version)
+        }
+    except RequirementReviewError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    missing = [
+        item
+        for item in body.requirement_ids
+        if item not in reviewed and item not in drafts
+    ]
+    if missing:
+        raise HTTPException(422, "one or more requirements are unavailable")
+    requirements: List[JDRequirement] = []
+    for requirement_id in body.requirement_ids:
+        if requirement_id in reviewed:
+            requirements.append(reviewed[requirement_id])
+            continue
+        draft = drafts[requirement_id]
+        terms = body.requirement_terms.get(requirement_id, [])
+        if not terms:
+            raise HTTPException(
+                422,
+                "request-local requirements require confirmed matching terms",
+            )
+        unsupported = [
+            term
+            for term in terms
+            if not term_present(term, draft.text.casefold())
+        ]
+        if unsupported:
+            raise HTTPException(422, "matching terms must appear in the JD requirement")
+        requirements.append(
+            draft.model_copy(
+                update={
+                    "normalized_terms": terms,
+                    "extraction_status": RequirementExtractionStatus.PARSED,
+                }
+            )
+        )
+    now = datetime.now(timezone.utc)
+    request_key = uuid.uuid4().hex[:16]
+    evidence = [
+        EvidenceRecord(
+            evidence_id=f"request:{request_key}:{index}",
+            user_id=f"request_{request_key}",
+            claim=claim,
+            evidence_type=EvidenceType.USER_STATEMENT,
+            fact_status=EvidenceFactStatus.CONFIRMED,
+            strength=EvidenceStrength.DIRECT,
+            captured_at=now,
+            verified_at=now,
+        )
+        for index, claim in enumerate(body.evidence, start=1)
+    ]
+    try:
+        decisions = match_approved_job(job_version, requirements, evidence)
+    except JobMatchBoundaryError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return V2WorkspaceMatchResponse(
+        job_id=job_version["job_id"],
+        job_version_id=job_version["job_version_id"],
+        company_name=job_version["company_name"],
+        title=job_version["title"],
+        source_url=job_version["source_url"],
+        reviewed_at=job_version.get("reviewed_at"),
+        last_verified_at=job_version.get("last_verified_at"),
+        job_max_age_days=body.job_max_age_days,
+        evidence_count=len(evidence),
+        summary=summarize_match_decisions(decisions),
+        items=pair_match_results(requirements, decisions),
+        decisions=decisions,
+    )
+
+
+@app.post(
+    "/v2/evidence",
+    response_model=EvidenceRecord,
+    tags=["V2 证据"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def create_v2_evidence(body: EvidenceRecord):
+    """Persist one immutable evidence record through the management boundary."""
+    try:
+        return _v2_evidence_registry().add_evidence(body)
+    except EvidenceConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get(
+    "/v2/evidence",
+    tags=["V2 证据"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def list_v2_evidence(
+    user_id: str = Query(min_length=1, max_length=128),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    try:
+        user_id = validate_identifier(user_id, "user_id")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    items = _v2_evidence_registry().list_evidence(user_id, limit=limit)
+    return {"count": len(items), "items": items}
+
+
+@app.post(
+    "/v2/confirmations",
+    response_model=UserConfirmation,
+    tags=["V2 证据"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def create_v2_confirmation(body: UserConfirmation):
+    """Append an explicit confirmation without mutating the V1 CareerProfile."""
+    try:
+        return _v2_evidence_registry().add_confirmation(body)
+    except EvidenceConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except EvidenceReferenceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get(
+    "/v2/confirmations",
+    tags=["V2 证据"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def list_v2_confirmations(
+    user_id: str = Query(min_length=1, max_length=128),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    try:
+        user_id = validate_identifier(user_id, "user_id")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    items = _v2_evidence_registry().list_confirmations(user_id, limit=limit)
+    return {"count": len(items), "items": items}
+
+
+@app.post(
+    "/v2/jobs/{job_id}/versions/{version_id}/requirements/extract",
+    response_model=V2RequirementListResponse,
+    tags=["V2 匹配"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def extract_v2_job_requirements(
+    job_id: str,
+    version_id: str,
+    body: V2RequirementExtractionInput,
+):
+    """Persist deterministic review-required drafts from one approved JD."""
+    try:
+        job_id = EvidenceRecord._validate_identifier(job_id)
+        version_id = EvidenceRecord._validate_identifier(version_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    job_version = _knowledge_base_instance().get_current_approved_job_version(
+        job_id=job_id,
+        version_id=version_id,
+        max_age_days=body.job_max_age_days,
+    )
+    if not job_version:
+        raise HTTPException(404, "current approved job version not found")
+    try:
+        drafts = extract_requirement_drafts(job_version)
+        items = _v2_evidence_registry().add_requirement_drafts(drafts)
+    except RequirementReviewError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except RequirementConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return V2RequirementListResponse(
+        job_id=job_id,
+        job_version_id=version_id,
+        count=len(items),
+        items=items,
+    )
+
+
+@app.get(
+    "/v2/jobs/{job_id}/versions/{version_id}/requirements",
+    response_model=V2RequirementListResponse,
+    tags=["V2 匹配"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def list_v2_job_requirements(job_id: str, version_id: str):
+    try:
+        job_id = EvidenceRecord._validate_identifier(job_id)
+        version_id = EvidenceRecord._validate_identifier(version_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    job_version = _knowledge_base_instance().get_current_approved_job_version(
+        job_id=job_id,
+        version_id=version_id,
+        max_age_days=90,
+    )
+    if not job_version:
+        raise HTTPException(404, "current approved job version not found")
+    items = _v2_evidence_registry().list_reviewed_requirements(version_id)
+    drafts = {
+        item.requirement_id: item
+        for item in _v2_evidence_registry().list_requirement_drafts(version_id)
+    }
+    current = {item.requirement_id: item for item in items}
+    combined = [current.get(requirement_id, draft) for requirement_id, draft in drafts.items()]
+    combined.sort(
+        key=lambda item: (
+            0 if getattr(item.source_field, "value", None) == "requirements" else 1,
+            item.source_index if item.source_index is not None else 10_000,
+            item.requirement_id,
+        )
+    )
+    return V2RequirementListResponse(
+        job_id=job_id,
+        job_version_id=version_id,
+        count=len(combined),
+        items=combined,
+    )
+
+
+@app.post(
+    "/v2/jobs/{job_id}/versions/{version_id}/requirements/{requirement_id}/reviews",
+    response_model=JDRequirement,
+    tags=["V2 匹配"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def review_v2_job_requirement(
+    job_id: str,
+    version_id: str,
+    requirement_id: str,
+    body: JDRequirementReview,
+):
+    try:
+        job_id = EvidenceRecord._validate_identifier(job_id)
+        version_id = EvidenceRecord._validate_identifier(version_id)
+        requirement_id = EvidenceRecord._validate_identifier(requirement_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if body.job_version_id != version_id or body.requirement_id != requirement_id:
+        raise HTTPException(422, "review path and payload identifiers must match")
+    job_version = _knowledge_base_instance().get_current_approved_job_version(
+        job_id=job_id,
+        version_id=version_id,
+        max_age_days=90,
+    )
+    if not job_version:
+        raise HTTPException(404, "current approved job version not found")
+    try:
+        _v2_evidence_registry().add_requirement_review(body)
+        reviewed = _v2_evidence_registry().get_reviewed_requirement(requirement_id)
+    except RequirementConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except RequirementReferenceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if reviewed is None:
+        raise HTTPException(422, "review did not produce a requirement state")
+    return reviewed
+
+
+@app.post(
+    "/v2/jobs/{job_id}/versions/{version_id}/match",
+    response_model=V2JobMatchResponse,
+    tags=["V2 匹配"],
+    dependencies=[Depends(require_admin_key)],
+)
+async def match_v2_approved_job(
+    job_id: str,
+    version_id: str,
+    body: V2JobMatchInput,
+):
+    """Match one current approved JD without changing profile or resume data."""
+    try:
+        job_id = EvidenceRecord._validate_identifier(job_id)
+        version_id = EvidenceRecord._validate_identifier(version_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    job_version = _knowledge_base_instance().get_current_approved_job_version(
+        job_id=job_id,
+        version_id=version_id,
+        max_age_days=body.job_max_age_days,
+    )
+    if not job_version:
+        raise HTTPException(404, "current approved job version not found")
+
+    requirements: List[JDRequirement] = []
+    for requirement_id in body.requirement_ids:
+        requirement = _v2_evidence_registry().get_reviewed_requirement(requirement_id)
+        if (
+            requirement is None
+            or requirement.job_version_id != version_id
+            or requirement.extraction_status != RequirementExtractionStatus.PARSED
+        ):
+            raise HTTPException(422, "one or more requirements are not approved")
+        requirements.append(requirement)
+
+    indexed = {
+        record.evidence_id: record
+        for record in _v2_evidence_registry().list_evidence(body.user_id, limit=200)
+    }
+    missing = [item for item in body.evidence_ids if item not in indexed]
+    if missing:
+        raise HTTPException(422, "one or more evidence records are unavailable")
+    evidence = [indexed[item] for item in body.evidence_ids]
+
+    try:
+        decisions = match_approved_job(job_version, requirements, evidence)
+    except JobMatchBoundaryError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return V2JobMatchResponse(
+        job_id=job_version["job_id"],
+        job_version_id=job_version["job_version_id"],
+        company_name=job_version["company_name"],
+        title=job_version["title"],
+        source_url=job_version["source_url"],
+        reviewed_at=job_version.get("reviewed_at"),
+        last_verified_at=job_version.get("last_verified_at"),
+        job_max_age_days=body.job_max_age_days,
+        evidence_count=len(evidence),
+        summary=summarize_match_decisions(decisions),
+        items=pair_match_results(requirements, decisions),
+        decisions=decisions,
+    )
 
 
 @app.post("/search")

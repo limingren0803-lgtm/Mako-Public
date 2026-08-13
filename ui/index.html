@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Mako 求职工作台">
   <title>Mako — AI Career Intelligence System</title>
-  <link rel="icon" type="image/png" href="/mako/assets/mako-favicon.png">
-  <link rel="stylesheet" href="/mako/styles.css">
+  <link rel="icon" type="image/png" href="assets/mako-favicon.png">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="/mako/" aria-label="Mako 首页">
-      <span class="brand-mark"><img src="/mako/assets/mako-icon.png" alt=""></span>
+      <span class="brand-mark"><img src="assets/mako-icon.png" alt=""></span>
       <span><strong>Mako</strong><small>AI Career Intelligence System</small></span>
     </a>
   </header>
@@ -67,6 +67,23 @@
               <div><label for="job-age">岗位时效</label><select id="job-age"><option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option></select></div>
               <div><label for="job-mode">信息不足时</label><select id="job-mode"><option value="verified_only">只使用已核验岗位</option><option value="official_links_if_missing">提供官方招聘入口</option></select></div>
             </div>
+            <section id="structured-match" class="structured-match" hidden>
+              <div class="section-heading"><div><h3>与已核验岗位逐项匹配</h3><p>选择岗位后，Mako 会列出官方 JD 原文条目，由你确认本次要核对的要求和关键词。</p></div></div>
+              <div class="job-search">
+                <input id="job-query" type="search" maxlength="200" placeholder="搜索公司、岗位或城市">
+                <button id="load-jobs" class="secondary" type="button">查找岗位</button>
+              </div>
+              <label for="job-select">目标岗位</label>
+              <select id="job-select"><option value="">未选择，使用常规方向分析</option></select>
+              <p id="job-status" class="hint">可选择有结构化 JD 原文的近期岗位；未选择时继续使用常规方向分析。</p>
+              <fieldset id="requirement-panel" hidden>
+                <legend>确认本次需要核对的岗位要求</legend>
+                <div id="requirement-list" class="requirement-list"></div>
+              </fieldset>
+              <label for="evidence-detail">与岗位要求相关的已确认经历</label>
+              <textarea id="evidence-detail" maxlength="12000" placeholder="例如：课程项目中使用 Python 和 SQL 清洗并分析业务数据。每项经历建议单独一行。"></textarea>
+              <p class="hint">这里填写的内容和已上传材料仅用于本次逐项匹配，不写入长期画像或证据库。</p>
+            </section>
           </details>
 
           <label class="confirm"><input id="confirm-input" type="checkbox"><span>我已检查上述材料，同意将其用于本次分析。</span></label>
@@ -87,6 +104,6 @@
       </div>
     </main>
   </div>
-  <script src="/mako/app.js" defer></script>
+  <script src="app.js?v=2" defer></script>
 </body>
 </html>

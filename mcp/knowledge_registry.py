@@ -918,6 +918,73 @@ class KnowledgeRegistry:
         result["review_notes"] = json.loads(result.get("review_notes") or "[]")
         return result
 
+    def get_current_approved_job_version(
+        self,
+        *,
+        job_id: str,
+        version_id: str,
+        max_age_days: int = 30,
+        as_of: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return one current approved version or no result for any other state."""
+        if not 1 <= max_age_days <= 90:
+            raise ValueError("max_age_days must be between 1 and 90")
+        now = (
+            datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+            if as_of
+            else datetime.now(timezone.utc)
+        )
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = now - timedelta(days=max_age_days)
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT j.job_id, j.source_id, j.external_id, j.company_name, j.title,
+                       j.status, j.current_version_id, j.last_verified_at,
+                       j.freshness_status, j.expires_at,
+                       v.job_version_id, v.version_number, v.content_hash, v.payload,
+                       v.source_url, v.fetched_at, v.published_at,
+                       v.validation_status, v.review_status, v.reviewed_at
+                FROM job_postings AS j
+                JOIN job_versions AS v ON v.job_version_id = j.current_version_id
+                WHERE j.job_id = ?
+                  AND v.job_version_id = ?
+                  AND j.status = 'active'
+                  AND v.review_status = 'approved'
+                  AND v.validation_status = 'active'
+                """,
+                (job_id, version_id),
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        last_verified_at = result.get("last_verified_at")
+        if not last_verified_at:
+            return None
+        try:
+            verified = datetime.fromisoformat(
+                str(last_verified_at).replace("Z", "+00:00")
+            )
+        except ValueError:
+            return None
+        if verified.tzinfo is None:
+            verified = verified.replace(tzinfo=timezone.utc)
+        if verified < cutoff:
+            return None
+        expires_at = result.get("expires_at")
+        if expires_at:
+            try:
+                expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires <= now:
+                return None
+        result["payload"] = json.loads(result["payload"])
+        return result
+
     def list_pending_job_versions(
         self,
         *,

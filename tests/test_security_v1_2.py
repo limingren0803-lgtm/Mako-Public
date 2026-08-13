@@ -108,11 +108,29 @@ class SecurityConfigurationTests(unittest.TestCase):
             "/jobs/tasks",
             "/jobs/tasks/{task_id}/run",
             "/jobs/tasks/{task_id}/retry",
+            "/v2/evidence",
+            "/v2/confirmations",
+            "/v2/jobs/{job_id}/versions/{version_id}/requirements/extract",
+            "/v2/jobs/{job_id}/versions/{version_id}/requirements",
+            "/v2/jobs/{job_id}/versions/{version_id}/requirements/{requirement_id}/reviews",
+            "/v2/jobs/{job_id}/versions/{version_id}/match",
             "/eval/run",
         }
         routes = {route.path: route for route in api_main.app.routes}
         for path in protected:
             self.assertTrue(routes[path].dependencies, path)
+
+    def test_ui_is_mounted_without_exposing_admin_credentials(self):
+        routes = {route.path: route for route in api_main.app.routes}
+        self.assertIn("/app", routes)
+        self.assertIn("/mako", routes)
+        ui_root = pathlib.Path(api_main.__file__).resolve().parents[1] / "ui"
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (ui_root / "index.html", ui_root / "app.js")
+        )
+        self.assertNotIn("MAKO_ADMIN_API_KEY", source)
+        self.assertNotIn("X-Admin-Key", source)
 
     def test_sensitive_payloads_are_not_named_in_runtime_logs(self):
         root = pathlib.Path(__file__).resolve().parents[1]
