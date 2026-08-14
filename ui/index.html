@@ -6,7 +6,7 @@
   <meta name="description" content="Mako 求职工作台">
   <title>Mako — AI Career Intelligence System</title>
   <link rel="icon" type="image/png" href="assets/mako-favicon.png">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
   <header class="topbar">
@@ -50,60 +50,91 @@
         <section class="card input-card">
           <div class="card-heading"><div><p class="eyebrow">INPUT</p><h2>提供本次分析材料</h2></div><span class="required">至少填写一项</span></div>
 
-          <label for="request">你希望 Mako 解决什么问题</label>
+          <label for="request" id="request-label">你希望 Mako 解决什么问题</label>
           <textarea id="request" maxlength="12000" placeholder="例如：请分析我的背景更适合哪些数据分析方向，并指出目前证据不足的部分。"></textarea>
           <div class="counter"><span id="request-count">0</span> / 12000</div>
+          <p id="request-hint" class="hint input-hint">可以说明目标岗位、已有经历和最希望确认的问题。</p>
 
           <div class="upload-zone">
             <input id="material-file" type="file" accept=".txt,.md,text/plain,text/markdown">
-            <label for="material-file"><b>上传 TXT 或 Markdown 材料</b><span>可上传简历文本、JD 或经历说明；提交后将作为本次分析输入发送</span></label>
+            <label for="material-file"><b id="upload-title">上传 TXT 或 Markdown 材料</b><span id="upload-description">可上传简历文本、JD 或经历说明；提交后将作为本次分析输入发送</span></label>
             <button id="clear-file" class="text-button" type="button" hidden>移除</button>
           </div>
           <p id="file-status" class="hint">当前支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符。PDF 与 DOCX 暂未接入。</p>
 
-          <details class="advanced">
+          <details class="advanced" id="job-options">
             <summary>岗位信息与分析范围</summary>
-            <div class="form-row">
+            <div class="form-row" id="job-settings">
               <div><label for="job-age">岗位时效</label><select id="job-age"><option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option></select></div>
               <div><label for="job-mode">信息不足时</label><select id="job-mode"><option value="verified_only">只使用已核验岗位</option><option value="official_links_if_missing">提供官方招聘入口</option></select></div>
             </div>
             <section id="structured-match" class="structured-match" hidden>
-              <div class="section-heading"><div><h3>与已核验岗位逐项匹配</h3><p>选择岗位后，Mako 会列出官方 JD 原文条目，由你确认本次要核对的要求和关键词。</p></div></div>
-              <div class="job-search">
-                <input id="job-query" type="search" maxlength="200" placeholder="搜索公司、岗位或城市">
-                <button id="load-jobs" class="secondary" type="button">查找岗位</button>
-              </div>
-              <label for="job-select">目标岗位</label>
-              <select id="job-select"><option value="">未选择，使用常规方向分析</option></select>
-              <p id="job-status" class="hint">可选择有结构化 JD 原文的近期岗位；未选择时继续使用常规方向分析。</p>
-              <fieldset id="requirement-panel" hidden>
-                <legend>确认本次需要核对的岗位要求</legend>
-                <div id="requirement-list" class="requirement-list"></div>
+              <div class="section-heading"><div><h3>选择岗位材料来源</h3><p>可以使用系统内已核验岗位，也可以粘贴本次希望分析的完整 JD。</p></div></div>
+              <fieldset class="source-switch">
+                <legend>岗位材料来源</legend>
+                <label><input type="radio" name="match-source" value="verified" checked><span><b>系统已核验职位</b><small>从本地职位库选择，并按审核过的 JD 原文逐项核对</small></span></label>
+                <label><input type="radio" name="match-source" value="manual"><span><b>自行提供 JD</b><small>粘贴完整职位描述，作为本次常规方向分析材料</small></span></label>
               </fieldset>
-              <label for="evidence-detail">与岗位要求相关的已确认经历</label>
-              <textarea id="evidence-detail" maxlength="12000" placeholder="例如：课程项目中使用 Python 和 SQL 清洗并分析业务数据。每项经历建议单独一行。"></textarea>
-              <p class="hint">这里填写的内容和已上传材料仅用于本次逐项匹配，不写入长期画像或证据库。</p>
+
+              <div id="verified-job-panel" class="source-panel">
+                <div class="job-search">
+                  <input id="job-query" type="search" maxlength="200" placeholder="搜索公司、岗位或城市">
+                  <button id="load-jobs" class="secondary" type="button">查找岗位</button>
+                </div>
+                <label for="job-select">目标岗位</label>
+                <select id="job-select"><option value="">未选择，使用常规方向分析</option></select>
+                <p id="job-status" class="hint">可选择有结构化 JD 原文的近期岗位；未选择时继续使用常规方向分析。</p>
+                <fieldset id="requirement-panel" hidden>
+                  <legend>确认本次需要核对的岗位要求</legend>
+                  <div id="requirement-list" class="requirement-list"></div>
+                </fieldset>
+              </div>
+
+              <div id="manual-jd-panel" class="source-panel" hidden>
+                <label for="manual-jd">完整 JD</label>
+                <textarea id="manual-jd" maxlength="15000" placeholder="粘贴岗位名称、职责、任职要求和其他需要关注的信息。"></textarea>
+                <div class="counter"><span id="manual-jd-count">0</span> / 15000</div>
+                <label for="manual-jd-source">官方职位链接（选填）</label>
+                <input id="manual-jd-source" type="url" maxlength="1000" placeholder="https://careers.example.com/job/...">
+                <p class="hint">链接只用于标记本次材料来源，Mako 不会在提交时自动访问该页面。</p>
+              </div>
+
+              <div id="match-evidence-panel">
+                <label for="evidence-detail">与岗位要求相关的已确认经历</label>
+                <textarea id="evidence-detail" maxlength="12000" placeholder="例如：课程项目中使用 Python 和 SQL 清洗并分析业务数据。每项经历建议单独一行。"></textarea>
+                <p class="hint">这里填写的内容和已上传材料仅用于本次分析，不写入长期画像或证据库。</p>
+              </div>
             </section>
           </details>
 
           <label class="confirm"><input id="confirm-input" type="checkbox"><span>我已检查上述材料，同意将其用于本次分析。</span></label>
-          <div class="actions"><button id="submit" class="primary" type="button">开始背景诊断</button><span id="submit-status" role="status"></span></div>
+          <div class="actions"><button id="submit" class="primary" type="button">开始背景诊断</button><button id="clear-input" class="secondary" type="button">清空本页</button></div>
+          <div id="submit-status" class="status-message" role="status" aria-live="polite"></div>
         </section>
 
         <aside class="right-column">
           <section class="card guide-card">
-            <p class="eyebrow">GUIDE</p><h2>这个板块会做什么</h2>
-            <ol id="skill-guide"><li>整理用户明确提供的经历</li><li>区分事实、推断与缺失信息</li><li>给出下一步补充建议</li></ol>
+            <div class="card-heading"><div><p class="eyebrow">GUIDE</p><h2>使用帮助</h2></div><span class="guide-skill" id="guide-skill">背景诊断</span></div>
+            <section class="guide-section"><h3>建议准备</h3><ul id="skill-prepare"></ul></section>
+            <section class="guide-section"><h3>如何使用</h3><ol id="skill-guide"><li>整理用户明确提供的经历</li><li>区分事实、推断与缺失信息</li><li>给出下一步补充建议</li></ol></section>
+            <section class="guide-section"><h3>结果怎么看</h3><p id="skill-output"></p></section>
+            <details class="help-details"><summary>遇到问题怎么办</summary><div id="skill-help"></div></details>
           </section>
           <section class="card output-card" id="output-card">
-            <p class="eyebrow">OUTPUT</p><h2>分析结果</h2>
+            <div class="card-heading"><div><p class="eyebrow">OUTPUT</p><h2>分析结果</h2></div><span class="result-state" id="result-state">等待材料</span></div>
             <div id="empty-output" class="empty">完成材料确认后，结果会显示在这里。</div>
             <div id="result" class="result" hidden></div>
+            <div id="result-actions" class="result-actions" hidden>
+              <button id="copy-result" class="secondary" type="button">复制结果</button>
+              <button id="download-result" class="secondary" type="button">下载 TXT</button>
+              <button id="restart-flow" class="text-button" type="button">重新开始</button>
+            </div>
+            <p id="result-action-status" class="hint" role="status" aria-live="polite"></p>
           </section>
         </aside>
       </div>
     </main>
   </div>
-  <script src="app.js?v=2" defer></script>
+  <script src="app.js?v=3" defer></script>
 </body>
 </html>
