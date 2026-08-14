@@ -151,6 +151,14 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertEqual(2, compose.count("ANONYMIZED_TELEMETRY=FALSE"))
         self.assertIn("posthog==5.4.0", requirements)
 
+    def test_model_chat_has_a_separate_gateway_rate_limit(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        nginx = (root / "config" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("/chat $binary_remote_addr;", nginx)
+        self.assertIn("zone=chat_limit:10m rate=2r/m", nginx)
+        self.assertIn("zone=chat_limit burst=4 nodelay", nginx)
+        self.assertIn("limit_req_status 429", nginx)
+
 
 class UploadBoundaryTests(unittest.TestCase):
     def setUp(self):

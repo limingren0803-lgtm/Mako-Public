@@ -4,7 +4,7 @@ AI Career Intelligence System
 
 Mako 是一个面向求职场景的多 Agent 系统，重点服务计划回国参加校招、实习或社会招聘的留学生。系统把用户的教育背景、项目经历、目标岗位和历史对话组织成可复用的 CareerProfile，并根据任务选择岗位匹配、JD 分析、简历优化、面试准备或求职规划能力。
 
-当前稳定版本为 v2.1.0。仓库包含可运行代码、公开基线测试和本地部署文档。
+当前稳定版本为 v2.2.0。仓库包含可运行代码、公开基线测试和本地部署文档。
 
 ## 求职工作台
 
@@ -53,9 +53,9 @@ Mako 不补写用户没有提供的经历、职责、技能、证书、数据或
 | 知识检索 | RAG knowledge retrieval、文档版本与回滚 |
 | 职位情报 | 23 家官方来源目录、JobPosting 标准化、审核、时效、用户来源选择与数据状态 |
 | V2 匹配 | 已审核 JD 要求、用户确认材料、逐项证据状态与请求级结果 |
-| 可观测性 | `/monitor`、Prometheus、evaluation |
+| 可观测性 | `/monitor`、Prometheus、evaluation、模型请求与 token 用量指标 |
 | 回答可靠性 | 完整性检测、一次有界续写和质量状态返回 |
-| API 契约 | Request ID、结构化错误、职位来源和安全验证摘要 |
+| API 契约 | Request ID、幂等请求、结构化错误、职位来源和安全验证摘要 |
 | 部署 | Docker Compose |
 
 请求主链路：
@@ -63,13 +63,15 @@ Mako 不补写用户没有提供的经历、职责、技能、证书、数据或
 ```text
 POST /chat
   -> Redis Working Memory + ChromaDB
-  -> IntentRecognizer
+  -> 已选 Career Skill / IntentRecognizer 回退
   -> AgentOrchestrator
   -> GeneralAgent / TechnicalAgent / CareerAgent
   -> SkillManager
   -> LLM response
   -> memory / profile / monitor / evaluation
 ```
+
+工作台已经明确选择 Career Skill 时，请求直接进入对应任务；没有提供选择的 API 客户端继续使用自动意图识别。本地知识上下文和 `/search` 直接查询现有知识库，不额外调用模型改写或重排查询。
 
 职位情报链路与聊天请求分离：
 
@@ -185,16 +187,17 @@ curl -X POST "http://localhost:8000/chat" \
 
 ## 验证
 
-v2.1.0 公开候选完成了以下验证：
+v2.2.0 公开候选完成了以下验证：
 
 | 检查项 | 结果 |
 |---|---|
-| 公开基线回归 | 133/133 通过 |
+| 公开基线回归 | 134/134 通过 |
 | Python syntax / import | 通过 |
 | Python 依赖审计 | 未发现已知漏洞 |
 | Docker Compose config | 通过 |
 | V2 请求级岗位匹配与权限边界 | 通过 |
 | 六个工作台板块、双职位入口与失败恢复 | 通过 |
+| 模型用量指标、幂等请求与 `/chat` 独立限流 | 通过 |
 
 公开仓库的 CI 会运行公开基线回归、依赖审计、Python 编译检查、Compose 配置检查和凭据模式扫描。
 
@@ -210,6 +213,7 @@ v2.1.0 公开候选完成了以下验证：
 - 来源目录用于建立覆盖面，尚未验证的站点不会启用自动分页或批量刷新；
 - 职位信息反映最近一次成功核验时的官网状态；扩大检索窗口会增加旧记录，投递前仍需打开返回的官方链接确认；
 - `/chat` 和 `/search` 尚未实现终端用户身份系统，公网多用户部署需要额外的身份层和 TLS。
+- `/chat` 的五分钟幂等缓存适用于当前单进程部署；多实例运行需要迁移到共享协调层；
 - V2 工作台只对具备已审核结构化 JD 条目的系统岗位提供逐项状态；其他有效岗位和用户自行提供的 JD 仍可通过常规方向匹配使用；
 - 请求级材料不会跨会话保存，PDF、DOCX、账户体系和跨设备恢复尚未开放。
 
@@ -233,11 +237,12 @@ ui/           求职工作台、交互脚本和品牌图标
 
 ## 数据兼容性
 
-v2.1.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和知识登记库结构不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径。V2 使用独立的证据登记路径；普通工作台请求不会写入该登记库，也不会改变既有聊天与记忆行为。
+v2.2.0 保持现有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和知识登记库结构不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径。V2 使用独立的证据登记路径；普通工作台请求不会写入该登记库，也不会改变既有聊天与记忆行为。
 
 ## 项目文档
 
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v2.2.0 发布说明](docs/releases/notes/v2.2.0.md)
 - [Mako v2.1.0 发布说明](RELEASE_NOTES_v2.1.0.md)
 - [Mako v2.0.0 发布说明](RELEASE_NOTES_v2.0.0.md)
 - [Mako v1.9.0 发布说明](RELEASE_NOTES_v1.9.0.md)

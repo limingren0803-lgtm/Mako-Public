@@ -11,6 +11,7 @@ from anthropic import AsyncAnthropic
 
 from core.intent_recognizer import IntentCategory, IntentRecognizer, IntentResult, TimeSensitivity
 from core.llm_utils import TextCompletion, extract_text_content, inspect_text_completion, join_continuation
+from core.model_usage import create_message
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,9 @@ class BaseAgent:
 
         max_tokens = CAREER_MAX_TOKENS if self.agent_type == AgentType.CAREER else 1024
 
-        resp = await self._client.messages.create(
+        resp = await create_message(
+            self._client,
+            operation=f"agent_{self.agent_type.value}",
             model=self._model,
             max_tokens=max_tokens,
             system=self._build_system_prompt(req),
@@ -172,7 +175,9 @@ class BaseAgent:
                 ),
             }
         )
-        continued_resp = await self._client.messages.create(
+        continued_resp = await create_message(
+            self._client,
+            operation=f"agent_{self.agent_type.value}_continuation",
             model=self._model,
             max_tokens=min(max_tokens, CONTINUATION_MAX_TOKENS),
             system=self._build_system_prompt(req),

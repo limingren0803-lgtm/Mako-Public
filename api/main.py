@@ -5,6 +5,7 @@ Mako — AI Career Intelligence System — FastAPI 入口
 所有核心组件在 lifespan 中初始化，通过环境变量配置。
 """
 import asyncio
+import hashlib
 import logging
 import os
 import pathlib
@@ -72,7 +73,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v2.1.0             ║
+   ║           Mako  v2.2.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -245,7 +246,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -256,7 +257,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Admin-Key", "X-Request-ID"],
+    allow_headers=["Content-Type", "Idempotency-Key", "X-Admin-Key", "X-Request-ID"],
     expose_headers=["X-Request-ID"],
     allow_credentials=False,
 )
@@ -277,6 +278,7 @@ def _error_code(status_code: int) -> str:
         401: "unauthorized",
         403: "forbidden",
         404: "not_found",
+        409: "conflict",
         413: "payload_too_large",
         415: "unsupported_media_type",
         422: "validation_error",
@@ -355,6 +357,14 @@ class ChatRequest(BaseModel):
     message:     str = Field(min_length=1, max_length=20000)
     user_id:     str = Field(default="anonymous", max_length=128)
     conv_id:     Optional[str] = Field(default=None, max_length=128)
+    career_intent: Optional[Literal[
+        "career_profile",
+        "career_match",
+        "career_jd",
+        "career_resume",
+        "career_interview",
+        "career_planning",
+    ]] = None
     job_max_age_days: int = Field(default=30, ge=1, le=90)
     job_source_ids: List[str] = Field(default_factory=list, max_length=5)
     job_data_mode: str = Field(
@@ -418,6 +428,17 @@ class ChatResponse(BaseModel):
     response_complete: bool = True
     continuation_used: bool = False
     quality_flags: List[str] = Field(default_factory=list)
+
+
+# ponytail: This five-minute cache assumes one API process. Move it to Redis
+# before running multiple workers or hosts.
+_chat_requests: Dict[str, tuple[str, asyncio.Task]] = {}
+
+
+def _expire_chat_request(key: str, task: asyncio.Task) -> None:
+    current = _chat_requests.get(key)
+    if current and current[1] is task:
+        _chat_requests.pop(key, None)
 
 
 class V2JobMatchInput(BaseModel):
@@ -600,6 +621,38 @@ async def reload_skills():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, http_request: FastAPIRequest):
+    headers = getattr(http_request, "headers", {})
+    key = headers.get("Idempotency-Key", "").strip() if hasattr(headers, "get") else ""
+    if not key:
+        return await _run_chat(req, http_request)
+    try:
+        key = validate_identifier(key, "Idempotency-Key")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    fingerprint = hashlib.sha256(req.model_dump_json().encode("utf-8")).hexdigest()
+    existing = _chat_requests.get(key)
+    if existing:
+        if existing[0] != fingerprint:
+            raise HTTPException(409, "Idempotency-Key 已用于其他请求")
+        task = existing[1]
+    else:
+        task = asyncio.create_task(_run_chat(req, http_request))
+        _chat_requests[key] = (fingerprint, task)
+        asyncio.get_running_loop().call_later(300, _expire_chat_request, key, task)
+
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if task.cancelled():
+            _expire_chat_request(key, task)
+        raise
+    except Exception:
+        _expire_chat_request(key, task)
+        raise
+
+
+async def _run_chat(req: ChatRequest, http_request: FastAPIRequest):
     """
     主对话接口。完整流程：
       记忆读取 → 意图识别 → Agent 路由 → 执行 → 记忆写入
@@ -608,6 +661,7 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         raise HTTPException(503, "服务未就绪")
 
     from agents.agent_orchestrator import Request as OrcReq
+    from core.intent_recognizer import IntentCategory
     from memory.conversation_memory import MsgRole
 
     conv_id = req.conv_id or str(uuid.uuid4())
@@ -628,14 +682,21 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         for m in mem_ctx.recent_messages[-5:]
     ] if mem_ctx.recent_messages else None
 
-    intent_result, knowledge_result = await asyncio.gather(
-        _orchestrator.recognize_intent(req.message, history=history),
-        _build_knowledge_context(req.message),
-    )
+    if req.career_intent:
+        intent = IntentCategory(req.career_intent)
+        time_sensitivity = None
+        knowledge_result = await _build_knowledge_context(req.message)
+    else:
+        intent_result, knowledge_result = await asyncio.gather(
+            _orchestrator.recognize_intent(req.message, history=history),
+            _build_knowledge_context(req.message),
+        )
+        intent = intent_result.intent
+        time_sensitivity = intent_result.time_sensitivity
     knowledge_text, knowledge_used = knowledge_result
     job_text, job_data_used, job_sources = _build_job_context(
         req.message,
-        intent=intent_result.intent,
+        intent=intent,
         max_age_days=req.job_max_age_days,
         source_ids=req.job_source_ids,
         data_mode=req.job_data_mode,
@@ -654,8 +715,8 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         conv_id=conv_id,
         context=full_context,
         history=history,
-        intent=intent_result.intent,
-        time_sensitivity=intent_result.time_sensitivity,
+        intent=intent,
+        time_sensitivity=time_sensitivity,
         request_id=_http_request_id(http_request),
     )
 
@@ -697,14 +758,17 @@ async def _build_knowledge_context(message: str, top_k: int = 3) -> tuple[str, b
     """
     为 /chat 主链路构建 RAG 知识上下文。
 
-    这里复用 MCPToolManager 的查询改写、并行召回、重排、fallback 能力。
+    这里通过 MCPToolManager 直接查询本地知识库，并保留 fallback 能力。
     """
     if _tool_manager is None:
         return "", False
     if not _should_use_knowledge(message):
         return "", False
     try:
-        result = await _tool_manager.search_with_rewrite("knowledge_search", message, top_k=top_k)
+        result = await _tool_manager.call(
+            "knowledge_search",
+            {"query": message, "top_k": top_k},
+        )
         if not result.success or not isinstance(result.data, list) or not result.data:
             return "", False
 
@@ -1494,12 +1558,14 @@ async def search(
     top_k: int = Query(default=5, ge=1, le=20),
 ):
     """
-    演示检索优化链路：查询改写 → 并行召回 → 重排 → Top-K。
-    展示 MCP 工具调用的核心亮点。
+    使用当前查询直接检索本地知识库，不额外调用模型改写或重排。
     """
     if _tool_manager is None:
         raise HTTPException(503, "服务未就绪")
-    result = await _tool_manager.search_with_rewrite("knowledge_search", query, top_k=top_k)
+    result = await _tool_manager.call(
+        "knowledge_search",
+        {"query": query, "top_k": top_k},
+    )
     return {"query": query, "results": result.data, "reranked": result.reranked}
 
 

@@ -133,6 +133,7 @@
   let activeSkill = "career_profile";
   let fileText = "";
   let conversationId = null;
+  let retryChatRequest = null;
   let jobsLoaded = false;
   const jobs = new Map();
   const userId = `ui_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -230,6 +231,9 @@
   const responseMessage = payload => payload?.error?.message || payload?.detail || "请求未完成";
 
   const readResponse = async response => {
+    if (response.status === 429) {
+      throw new Error("当前请求较多，请稍等片刻后重试。你的输入内容已保留。");
+    }
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("application/json")) {
       throw new Error("服务返回了无法识别的响应，请稍后重试。");
@@ -645,20 +649,27 @@
     submit.disabled = true;
     setSubmitStatus("正在分析，请不要重复提交。", "busy");
     try {
+      const body = JSON.stringify({
+        message,
+        user_id: userId,
+        conv_id: conversationId,
+        career_intent: activeSkill,
+        job_max_age_days: Number(document.getElementById("job-age").value),
+        job_data_mode: document.getElementById("job-mode").value
+      });
+      const idempotencyKey = retryChatRequest?.body === body
+        ? retryChatRequest.key
+        : `chat_${crypto.randomUUID().replaceAll("-", "")}`;
+      retryChatRequest = {body, key: idempotencyKey};
       const response = await fetch("/chat", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          message,
-          user_id: userId,
-          conv_id: conversationId,
-          job_max_age_days: Number(document.getElementById("job-age").value),
-          job_data_mode: document.getElementById("job-mode").value
-        })
+        headers: {"Content-Type": "application/json", "Idempotency-Key": idempotencyKey},
+        body
       });
       const payload = await readResponse(response);
       if (!response.ok) throw new Error(payload?.error?.message || "请求未完成");
       conversationId = payload.conv_id;
+      retryChatRequest = null;
       result.replaceChildren();
       result.textContent = payload.response;
       const meta = document.createElement("div");

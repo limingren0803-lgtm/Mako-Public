@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from anthropic import AsyncAnthropic
 
 from core.llm_utils import extract_text_content
+from core.model_usage import create_message
 
 logger = logging.getLogger(__name__)
 
@@ -139,14 +140,13 @@ class IntentRecognizer:
             emb = {"intent": IntentCategory.OTHER, "confidence": 0.0}
 
         intent = self._vote(llm, emb, pat)
-        entities = await self._extract_entities(message)
         time_sensitivity = self._time_sensitivity(message, intent)
 
         result = IntentResult(
             intent=intent,
             confidence=llm["confidence"],
             time_sensitivity=time_sensitivity,
-            entities=entities,
+            entities={},
             reasoning=llm.get("reasoning", ""),
             latency_ms=(time.monotonic() - t0) * 1000,
         )
@@ -204,7 +204,9 @@ class IntentRecognizer:
         prompt = self._clean_text(prompt)
 
         try:
-            resp = await self.client.messages.create(
+            resp = await create_message(
+                self.client,
+                operation="intent_recognition",
                 model=self.model,
                 max_tokens=256,
                 temperature=0.1,
@@ -299,26 +301,6 @@ class IntentRecognizer:
 
         best = max(scores, key=scores.get)  # type: ignore
         return best if scores[best] >= self.threshold else IntentCategory.OTHER
-
-    # ── 实体提取 ──────────────────────────────────────────────────────────────
-
-    async def _extract_entities(self, message: str) -> Dict[str, List[str]]:
-        """用 LLM 从消息中提取结构化实体。"""
-        message = self._clean_text(message)
-        prompt = f"""从用户消息中提取结构化实体，返回 JSON（字段值为列表，没有则为空列表）:
-消息: "{message}"
-格式: {{"order_id":[],"product":[],"date":[],"amount":[],"error_code":[]}}"""
-        prompt = self._clean_text(prompt)
-        try:
-            resp = await self.client.messages.create(
-                model=self.model, max_tokens=256, temperature=0.0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = extract_text_content(resp.content)
-            s, e = raw.find("{"), raw.rfind("}") + 1
-            return json.loads(raw[s:e])
-        except Exception:
-            return {"order_id": [], "product": [], "date": [], "amount": [], "error_code": []}
 
     # ── 辅助 ──────────────────────────────────────────────────────────────────
 
