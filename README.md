@@ -41,7 +41,7 @@ Mako 处理的不只是一份简历，而是求职过程中一连串相互关联
 ## 从背景梳理到行动计划
 
 <p align="center">
-  <img src="docs/images/mako-career-flow.gif" alt="小 Finn 串联背景诊断、方向匹配、JD 分析、简历优化、面试准备和行动规划" width="720">
+  <img src="docs/images/mako-career-flow.gif" alt="小 Finn 串联背景诊断、方向匹配、JD 分析、简历优化、面试准备和行动规划" width="360">
 </p>
 
 这六项任务对应求职中经常连续出现的六个问题。用户可以从当前最需要的阶段开始，也可以基于同一份个人材料依次完成。
