@@ -143,12 +143,12 @@ networks:
 # ── 数据卷 ──────────────────────────────────────────────────────────────────
 volumes:
   redis-data:
-    name: echomind_redis-data
+    name: mako_redis-data
   chromadb-data:
-    name: echomind_chromadb-data
+    name: mako_chromadb-data
   knowledge-registry-data:
     name: mako_knowledge-registry-data
   prometheus-data:
-    name: echomind_prometheus-data
+    name: mako_prometheus-data
   nginx-logs:
-    name: echomind_nginx-logs
+    name: mako_nginx-logs

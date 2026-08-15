@@ -21,10 +21,16 @@ from typing import Any
 ARCHIVE_SCHEMA_VERSION = 1
 HELPER_IMAGE = "alpine:3.20"
 VOLUMES = {
-    "redis": "echomind_redis-data",
-    "chromadb": "echomind_chromadb-data",
+    "redis": "mako_redis-data",
+    "chromadb": "mako_chromadb-data",
     "knowledge_registry": "mako_knowledge-registry-data",
+    "prometheus": "mako_prometheus-data",
+    "nginx_logs": "mako_nginx-logs",
 }
+SUPPORTED_ARCHIVE_SETS = (
+    frozenset(VOLUMES),
+    frozenset({"redis", "chromadb", "knowledge_registry"}),
+)
 TEMP_VOLUME_PREFIX = "mako-restore-check-"
 
 
@@ -76,7 +82,7 @@ def validate_backup(backup_dir: Path) -> dict[str, Any]:
         raise ValueError("Unsupported backup manifest schema version.")
 
     archives = manifest.get("archives")
-    if not isinstance(archives, dict) or set(archives) != set(VOLUMES):
+    if not isinstance(archives, dict) or frozenset(archives) not in SUPPORTED_ARCHIVE_SETS:
         raise ValueError("Backup manifest does not contain the expected volumes.")
 
     for logical_name, metadata in archives.items():

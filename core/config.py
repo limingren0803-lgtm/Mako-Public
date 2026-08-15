@@ -1,20 +1,12 @@
-"""Configuration helpers for Mako environment-variable migrations."""
+"""Configuration helpers for Mako environment variables."""
 import os
-from typing import Optional
 
 
-def env_with_legacy(primary: str, legacy: Optional[str], default: str) -> str:
-    """Read the Mako variable first, then an optional legacy alias."""
-    primary_value = os.getenv(primary, "").strip()
-    if primary_value:
-        return primary_value
-    if legacy:
-        legacy_value = os.getenv(legacy, "").strip()
-        if legacy_value:
-            return legacy_value
-    return default
+def env_value(name: str, default: str) -> str:
+    """Read a non-blank Mako environment variable or use its default."""
+    return os.getenv(name, "").strip() or default
 
 
-def env_int_with_legacy(primary: str, legacy: Optional[str], default: int) -> int:
-    """Read an integer environment variable with a compatibility fallback."""
-    return int(env_with_legacy(primary, legacy, str(default)))
+def env_int(name: str, default: int) -> int:
+    """Read an integer Mako environment variable or use its default."""
+    return int(env_value(name, str(default)))

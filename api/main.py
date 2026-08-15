@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core.security import cors_origins, env_bool, require_admin_key, validate_identifier
-from core.config import env_int_with_legacy, env_with_legacy
+from core.config import env_int, env_value
 from core.v2_evidence import (
     EvidenceFactStatus,
     EvidenceRecord,
@@ -129,16 +129,14 @@ async def lifespan(app: FastAPI):
     )
 
     # Skills：启动时从目录加载业务能力说明，并在 Agent 调用 LLM 时动态注入。
-    skills_dir = env_with_legacy(
+    skills_dir = env_value(
         "MAKO_SKILLS_DIR",
-        "ECHOMIND_SKILLS_DIR",
         str(pathlib.Path(_ROOT) / "skills"),
     )
     _skill_manager = SkillManager(
         root_dir=skills_dir,
-        max_prompt_chars=env_int_with_legacy(
+        max_prompt_chars=env_int(
             "MAKO_SKILLS_MAX_PROMPT_CHARS",
-            "ECHOMIND_SKILLS_MAX_PROMPT_CHARS",
             18000,
         ),
     )
@@ -2527,14 +2525,12 @@ async def _cli():
 
     cfg = _anthropic_cfg()
     skill_manager = SkillManager(
-        root_dir=env_with_legacy(
+        root_dir=env_value(
             "MAKO_SKILLS_DIR",
-            "ECHOMIND_SKILLS_DIR",
             str(pathlib.Path(_ROOT) / "skills"),
         ),
-        max_prompt_chars=env_int_with_legacy(
+        max_prompt_chars=env_int(
             "MAKO_SKILLS_MAX_PROMPT_CHARS",
-            "ECHOMIND_SKILLS_MAX_PROMPT_CHARS",
             18000,
         ),
     )
