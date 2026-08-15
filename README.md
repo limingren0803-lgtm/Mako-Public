@@ -6,10 +6,9 @@
 
 <p align="center"><strong>AI Career Intelligence System</strong></p>
 
-<p align="center">
-  <strong>求职路线，只此一条——你的。</strong><br>
-  <sub>背景、意向、官方岗位，逐条核对生成，不是通用模板。</sub>
-</p>
+<h2 align="center">求职路线，只此一条——你的。</h2>
+
+<h3 align="center">背景、意向、官方岗位，逐条核对生成，不是通用模板。</h3>
 
 <p align="center">
   Mako 面向计划回国求职的留学生，也服务国内应届生，从官方岗位中匹配、推荐适合你的岗位，把你的经历逐项对照岗位要求，整理出一条专属于你的求职路线。
