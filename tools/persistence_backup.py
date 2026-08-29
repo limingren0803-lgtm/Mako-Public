@@ -20,15 +20,18 @@ from typing import Any
 
 ARCHIVE_SCHEMA_VERSION = 1
 HELPER_IMAGE = "alpine:3.20"
+APPLICATION_IMAGE = "mako-mako"
 VOLUMES = {
     "redis": "mako_redis-data",
     "chromadb": "mako_chromadb-data",
     "knowledge_registry": "mako_knowledge-registry-data",
+    "career_workspace": "mako_career-workspace-data",
     "prometheus": "mako_prometheus-data",
     "nginx_logs": "mako_nginx-logs",
 }
 SUPPORTED_ARCHIVE_SETS = (
     frozenset(VOLUMES),
+    frozenset({"redis", "chromadb", "knowledge_registry", "prometheus", "nginx_logs"}),
     frozenset({"redis", "chromadb", "knowledge_registry"}),
 )
 TEMP_VOLUME_PREFIX = "mako-restore-check-"
@@ -118,7 +121,12 @@ def create_backup(output_root: Path) -> Path:
 
     try:
         for logical_name, volume_name in VOLUMES.items():
-            _run([docker, "volume", "inspect", volume_name], capture=True)
+            try:
+                _run([docker, "volume", "inspect", volume_name], capture=True)
+            except subprocess.CalledProcessError:
+                if logical_name == "career_workspace":
+                    continue
+                raise
             attached = _run(
                 [docker, "ps", "--filter", f"volume={volume_name}", "--format", "{{.Names}}"],
                 capture=True,
@@ -217,6 +225,30 @@ def restore_check(backup_dir: Path) -> None:
             )
             if not restored_entry:
                 raise RuntimeError(f"Restore check produced an empty {logical_name} volume.")
+            if logical_name == "career_workspace":
+                _run(
+                    [
+                        docker,
+                        "run",
+                        "--rm",
+                        "--volume",
+                        f"{temp_volume}:/restore:ro",
+                        "--entrypoint",
+                        "python",
+                        APPLICATION_IMAGE,
+                        "-c",
+                        (
+                            "import sqlite3; "
+                            "c=sqlite3.connect("
+                            "'file:/restore/workspace.sqlite3?mode=ro&immutable=1', uri=True); "
+                            "assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; "
+                            "assert not c.execute('PRAGMA foreign_key_check').fetchall(); "
+                            "assert c.execute('SELECT schema_version FROM workspace_schema "
+                            "WHERE singleton=1').fetchone()[0]==1"
+                        ),
+                    ],
+                    capture=True,
+                )
     finally:
         for volume_name in reversed(created_volumes):
             if volume_name.startswith(TEMP_VOLUME_PREFIX):

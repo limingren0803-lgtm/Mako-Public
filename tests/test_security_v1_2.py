@@ -116,12 +116,16 @@ class SecurityConfigurationTests(unittest.TestCase):
             "/v2/jobs/{job_id}/versions/{version_id}/match",
             "/eval/run",
         }
-        routes = {route.path: route for route in api_main.app.routes}
+        routes = {
+            route.path: route for route in api_main.app.routes if hasattr(route, "path")
+        }
         for path in protected:
             self.assertTrue(routes[path].dependencies, path)
 
     def test_ui_is_mounted_without_exposing_admin_credentials(self):
-        routes = {route.path: route for route in api_main.app.routes}
+        routes = {
+            route.path: route for route in api_main.app.routes if hasattr(route, "path")
+        }
         self.assertIn("/app", routes)
         self.assertIn("/mako", routes)
         ui_root = pathlib.Path(api_main.__file__).resolve().parents[1] / "ui"

@@ -7,6 +7,7 @@
   <title>Mako — AI Career Intelligence System</title>
   <link rel="icon" type="image/png" href="assets/mako-favicon.png">
   <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="workspace.css?v=1">
 </head>
 <body>
   <header class="topbar">
@@ -18,6 +19,13 @@
 
   <div class="workspace">
     <aside class="sidebar" aria-label="功能导航">
+      <p class="eyebrow">求职进度</p>
+      <nav id="workspace-nav" aria-label="求职进度">
+        <button class="nav-item active" data-workspace-view="overview"><span>00</span><b>求职总览</b><small>今天先做什么</small></button>
+        <button class="nav-item" data-workspace-view="tracks"><span>↗</span><b>目标岗位</b><small>跟进岗位与依据</small></button>
+        <button class="nav-item" data-workspace-view="actions"><span>✓</span><b>今日行动</b><small>确认并完成任务</small></button>
+      </nav>
+      <div class="sidebar-divider"></div>
       <p class="eyebrow">求职流程</p>
       <nav id="skill-nav">
         <button class="nav-item active" data-skill="career_profile"><span>01</span><b>背景诊断</b><small>整理经历与能力边界</small></button>
@@ -30,6 +38,178 @@
     </aside>
 
     <main class="main">
+      <section id="career-workspace-view" aria-label="求职进度工作区">
+        <header class="workspace-hero">
+          <div>
+            <p class="eyebrow">CAREER WORKSPACE</p>
+            <h1 id="workspace-view-title">今天先完成真正影响进度的事</h1>
+            <p id="workspace-view-description">目标岗位、判断依据和下一步行动集中在这里，六项分析结果不再停留在一次对话里。</p>
+          </div>
+          <div class="workspace-hero-actions">
+            <span id="workspace-session-state" class="session-state">正在连接本地工作区</span>
+            <button class="secondary" id="export-workspace" type="button">导出数据</button>
+            <button class="text-button danger-text" id="clear-workspace" type="button">清空数据</button>
+          </div>
+        </header>
+
+        <div id="workspace-message" class="workspace-message" role="status" aria-live="polite"></div>
+
+        <section class="workspace-page" data-page="overview">
+          <div class="summary-strip" aria-label="求职进度摘要">
+            <article><span>今天优先做</span><strong id="summary-priority-count">—</strong><small>最多显示 5 项</small></article>
+            <article><span>临近截止</span><strong id="summary-due-count">—</strong><small>未来 7 天</small></article>
+            <article><span>进行中岗位</span><strong id="summary-track-count">—</strong><small>不含已结束</small></article>
+            <article><span>行动总数</span><strong id="summary-action-count">—</strong><small>包含已完成和已取消</small></article>
+          </div>
+
+          <div class="overview-grid">
+            <section class="workspace-card today-card">
+              <div class="workspace-card-heading">
+                <div><p class="eyebrow">TODAY</p><h2>今天优先做</h2></div>
+                <button class="text-button" data-open-action type="button">添加行动</button>
+              </div>
+              <div id="overview-priority-list" class="workspace-list"></div>
+            </section>
+
+            <section class="workspace-card stage-card">
+              <div class="workspace-card-heading">
+                <div><p class="eyebrow">PROGRESS</p><h2>岗位进度</h2></div>
+                <button class="text-button" data-open-track type="button">添加岗位</button>
+              </div>
+              <div id="stage-overview" class="stage-overview"></div>
+              <div id="recent-track-list" class="compact-track-list"></div>
+            </section>
+
+            <section class="workspace-card history-card">
+              <div class="workspace-card-heading">
+                <div><p class="eyebrow">HISTORY</p><h2>最近完成</h2></div>
+                <span class="trace-note">完成后仍可重新打开</span>
+              </div>
+              <div id="overview-history-list" class="workspace-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="workspace-page" data-page="tracks" hidden>
+          <div class="page-toolbar">
+            <div>
+              <p class="eyebrow">TARGET JOBS</p>
+              <h2>目标岗位</h2>
+              <p>从关注到面试，每个阶段都保留来源、要求和关联行动。</p>
+            </div>
+            <button class="primary" data-open-track type="button">添加目标岗位</button>
+          </div>
+          <div class="track-workbench">
+            <aside class="workspace-card track-index" aria-label="目标岗位列表">
+              <div class="filter-row">
+                <label for="track-stage-filter">筛选阶段</label>
+                <select id="track-stage-filter">
+                  <option value="">全部岗位</option>
+                  <option value="watching">关注中</option>
+                  <option value="preparing">准备中</option>
+                  <option value="applied">已投递</option>
+                  <option value="interviewing">面试中</option>
+                  <option value="closed">已结束</option>
+                </select>
+              </div>
+              <div id="track-list" class="track-list"></div>
+            </aside>
+            <section id="track-detail" class="workspace-card track-detail">
+              <div class="workspace-empty">
+                <span>01</span>
+                <h3>选择一个目标岗位</h3>
+                <p>这里会显示岗位来源、当前阶段、JD 要求和下一步行动。</p>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="workspace-page" data-page="actions" hidden>
+          <div class="page-toolbar">
+            <div>
+              <p class="eyebrow">NEXT ACTIONS</p>
+              <h2>今日行动</h2>
+              <p>每件事都有完成标准，由你决定何时开始、完成或重新打开。</p>
+            </div>
+            <button class="primary" data-open-action type="button">添加行动</button>
+          </div>
+          <section class="workspace-card">
+            <div class="action-filters">
+              <label for="action-status-filter">状态</label>
+              <select id="action-status-filter">
+                <option value="">全部状态</option>
+                <option value="suggested">待确认</option>
+                <option value="todo">待完成</option>
+                <option value="completed">已完成</option>
+                <option value="cancelled">已取消</option>
+              </select>
+              <label for="action-track-filter">目标岗位</label>
+              <select id="action-track-filter"><option value="">全部岗位</option></select>
+            </div>
+            <div id="action-list" class="workspace-list action-list"></div>
+          </section>
+        </section>
+
+        <dialog id="track-dialog" class="workspace-dialog">
+          <form id="track-form" method="dialog">
+            <div class="dialog-heading">
+              <div><p class="eyebrow">NEW TARGET</p><h2>添加目标岗位</h2></div>
+              <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+            </div>
+            <fieldset class="source-switch">
+              <legend>岗位来源</legend>
+              <label><input type="radio" name="track-source" value="reviewed_job" checked><span><b>系统已核验职位</b><small>保留官方来源、版本和核验时间</small></span></label>
+              <label><input type="radio" name="track-source" value="manual_jd"><span><b>自行提供 JD</b><small>链接只作为来源标注，不自动访问</small></span></label>
+            </fieldset>
+            <div id="track-reviewed-fields" class="dialog-fields">
+              <label for="track-reviewed-job">选择职位</label>
+              <select id="track-reviewed-job" name="reviewed_job"><option value="">正在读取已核验职位…</option></select>
+              <p id="track-reviewed-status" class="hint">读取系统内近期已审核职位。</p>
+            </div>
+            <div id="track-manual-fields" class="dialog-fields" hidden>
+              <div class="form-row">
+                <div><label for="track-company">企业</label><input id="track-company" name="company_name" maxlength="200"></div>
+                <div><label for="track-title">岗位</label><input id="track-title" name="title" maxlength="500"></div>
+              </div>
+              <label for="track-locations">地点（选填，以顿号分隔）</label>
+              <input id="track-locations" name="locations" maxlength="1000">
+              <label for="track-source-url">官方职位链接（选填）</label>
+              <input id="track-source-url" name="source_url" type="url" maxlength="2000" placeholder="https://careers.example.com/job/...">
+              <label for="track-jd">完整 JD</label>
+              <textarea id="track-jd" name="jd_text" maxlength="100000" placeholder="粘贴岗位职责、任职要求和其他需要关注的信息。"></textarea>
+            </div>
+            <label for="track-deadline">报名截止时间（选填）</label>
+            <input id="track-deadline" name="deadline" type="date">
+            <p id="track-form-status" class="status-message" role="status"></p>
+            <div class="dialog-actions"><button class="secondary" value="cancel" type="submit">取消</button><button id="save-track" class="primary" value="default" type="submit">保存目标岗位</button></div>
+          </form>
+        </dialog>
+
+        <dialog id="action-dialog" class="workspace-dialog">
+          <form id="action-form" method="dialog">
+            <div class="dialog-heading">
+              <div><p class="eyebrow">NEXT ACTION</p><h2 id="action-dialog-title">添加行动</h2></div>
+              <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+            </div>
+            <input id="action-id" type="hidden">
+            <label for="action-track">关联目标岗位（选填）</label>
+            <select id="action-track"><option value="">通用行动，不关联岗位</option></select>
+            <label for="action-title">要完成什么</label>
+            <input id="action-title" maxlength="300" placeholder="例如：补充项目经历中的结果说明">
+            <label for="action-criteria">怎样算完成</label>
+            <textarea id="action-criteria" maxlength="2000" placeholder="例如：已核对并补充一段能够确认的项目结果，不添加未经证实的数据。"></textarea>
+            <div class="form-row">
+              <div><label for="action-priority">优先级</label><select id="action-priority"><option value="high">高</option><option value="medium" selected>中</option><option value="low">低</option></select></div>
+              <div><label for="action-due">截止时间（选填）</label><input id="action-due" type="datetime-local"></div>
+            </div>
+            <div id="action-source-preview" class="source-preview" hidden></div>
+            <p id="action-form-status" class="status-message" role="status"></p>
+            <div class="dialog-actions"><button class="secondary" value="cancel" type="submit">取消</button><button id="save-action" class="primary" value="default" type="submit">保存行动</button></div>
+          </form>
+        </dialog>
+      </section>
+
+      <div id="skill-workspace-view" hidden>
       <section class="flow" aria-label="当前处理流程">
         <div class="flow-step current" data-flow-step="1"><span>1</span><b>选择功能</b></div>
         <div class="flow-line"></div>
@@ -133,8 +313,10 @@
           </section>
         </aside>
       </div>
+      </div>
     </main>
   </div>
   <script src="app.js?v=3" defer></script>
+  <script src="workspace.js?v=1" defer></script>
 </body>
 </html>

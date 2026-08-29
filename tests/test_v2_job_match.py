@@ -375,7 +375,8 @@ class JobMatchApiTests(unittest.TestCase):
         route = next(
             route
             for route in api_main.app.routes
-            if route.path == "/v2/jobs/{job_id}/versions/{version_id}/match"
+            if getattr(route, "path", None)
+            == "/v2/jobs/{job_id}/versions/{version_id}/match"
         )
         self.assertTrue(route.dependencies)
 

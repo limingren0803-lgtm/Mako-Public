@@ -21,8 +21,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v2.2.0-4D74A8" alt="Mako v2.2.0">
-  <img src="https://img.shields.io/badge/public_tests-134%2F134-2E8B57" alt="公开回归测试 134/134">
+  <img src="https://img.shields.io/badge/version-v2.3.0-4D74A8" alt="Mako v2.3.0">
+  <img src="https://img.shields.io/badge/public_tests-138%2F138-2E8B57" alt="公开回归测试 138/138">
   <img src="https://img.shields.io/badge/Docker_services-5-2496ED" alt="5 个 Docker 服务">
 </p>
 
@@ -68,9 +68,25 @@ Mako 处理的不只是一份简历，而是求职过程中一连串相互关联
 
 前一步形成的判断，会成为后一步的输入：岗位方向决定需要重点查看哪些 JD，JD 中的要求决定简历和面试应当准备哪些证据，尚未覆盖的要求则进入后续行动计划。
 
+## 把分析变成接下来要做的事
+
+六项 Career Skill 用来解决当前问题，Career Workspace 则把用户已经确认的目标岗位和行动保留下来。一次分析结束后，岗位来源、当前阶段、报名截止时间和下一步安排仍然可以继续跟进，不必在不同功能之间反复整理同一份 JD。
+
+工作区由三个相互关联的页面组成：
+
+- 求职总览汇总今天优先处理的事项、未来七天的截止安排和岗位阶段；
+- 目标岗位记录官方已审核职位或用户自行提供的完整 JD，并保留来源和当前状态；
+- 今日行动把任务写成可完成的事项，明确完成标准，并可关联到具体岗位。
+
+这些状态由用户确认和更新。系统不会因为一次分析自动改变投递或面试阶段，也不会把建议直接记成已经接受的行动。工作区使用独立的本地 SQLite 保存数据，支持导出和清空，不反向修改 CareerProfile、官方职位库、Evidence Registry、Redis 或 ChromaDB。
+
+![Mako Career Workspace 求职行动总览](docs/images/mako-career-workspace.png)
+
 ## 在工作台里开始
 
-六项任务都可以从同一个工作台进入。选择当前要解决的问题后，用户可以直接输入情况，也可以上传 UTF-8 编码的 `.txt` 或 `.md` 材料；系统会先展示本次使用的内容，确认后再生成结果。
+工作台现在同时提供求职总览、目标岗位、今日行动和六项 Career Skill。用户可以先记录需要持续跟进的岗位，也可以直接进入当前要解决的分析任务。
+
+使用 Career Skill 时，可以直接输入情况，也可以上传 UTF-8 编码的 `.txt` 或 `.md` 材料；系统会先展示本次使用的内容，确认后再生成结果。
 
 上传的文件文本只随本次请求处理，不作为知识文档导入。
 
@@ -92,15 +108,15 @@ Mako 给出建议时，会同时说明使用了哪些材料、哪些结论已有
 
 ## 项目当前进展
 
-当前稳定版本为 v2.2.0。以下数据来自公开仓库与已发布版本的可验证状态。
+当前稳定版本为 v2.3.0。以下数据来自公开仓库与已发布版本的可验证状态。
 
 | 项目 | 当前状态 |
 |---|---:|
 | 求职任务 | 6 项 |
 | 企业官方来源 | 23 个 |
 | 已审核结构化职位样本 | 35 个 |
-| 正式版本 | v1.0.0 至 v2.2.0，共 13 个 |
-| 公开回归测试 | 134/134 通过 |
+| 正式版本 | v1.0.0 至 v2.3.0，共 14 个 |
+| 公开回归测试 | 138/138 通过 |
 | Docker 服务 | 5 个 |
 
 ## 快速启动
@@ -145,6 +161,7 @@ Mako 的产品流程由 Agent、Skills、记忆、知识检索、职位数据治
 | 知识检索 | RAG knowledge retrieval、文档版本与回滚 |
 | 职位情报 | 23 家官方来源目录、JobPosting 标准化、审核、时效与用户来源选择 |
 | V2 匹配 | 已审核 JD 要求、用户确认材料、逐项证据状态与请求级结果 |
+| 求职工作区 | JobTrack、ActionItem、独立 SQLite、本机会话、修订冲突检查与数据导出 |
 | 可观测性 | `/monitor`、Prometheus、evaluation、模型请求与 token 用量指标 |
 | 回答可靠性 | 完整性检测、一次有界续写和质量状态返回 |
 | API 契约 | Request ID、幂等请求、结构化错误、职位来源和安全验证摘要 |
@@ -235,6 +252,7 @@ ENABLE_SWAGGER_UI=true
 | `http://localhost:8000/monitor` | 监控摘要，需 `X-Admin-Key` |
 | `http://localhost:8000/search` | 本地知识检索 |
 | `http://localhost:8000/jobs/sources` | 官方职位来源只读目录 |
+| `http://localhost:8000/v2/workspace/*` | 求职工作区会话、岗位、行动、总览与导出 |
 | `http://localhost:9090` | Prometheus |
 
 ```bash
@@ -269,16 +287,17 @@ curl -X POST "http://localhost:8000/chat" \
 <details>
 <summary>验证、已知边界与安全边界</summary>
 
-v2.2.0 公开候选完成了以下验证：
+v2.3.0 公开候选完成了以下验证：
 
 | 检查项 | 结果 |
 |---|---|
-| 公开基线回归 | 134/134 通过 |
+| 公开基线回归 | 138/138 通过 |
 | Python syntax / import | 通过 |
-| Python 依赖审计 | 未发现已知漏洞 |
+| Python 依赖审计 | 执行 `pip-audit`；ChromaDB 三项暂无修复版本的公告使用精确临时例外 |
 | Docker Compose config | 通过 |
 | V2 请求级岗位匹配与权限边界 | 通过 |
-| 六个工作台板块、双职位入口与失败恢复 | 通过 |
+| Career Workspace 会话、岗位、行动、冲突与删除边界 | 通过 |
+| 求职总览、目标岗位、今日行动与六个 Career Skill | 通过 |
 | 模型用量指标、幂等请求与 `/chat` 独立限流 | 通过 |
 
 公开仓库的 CI 会运行公开基线回归、依赖审计、Python 编译检查、Compose 配置检查和凭据模式扫描。本地运行公开基线测试：
@@ -292,11 +311,12 @@ v2.2.0 公开候选完成了以下验证：
 - 不同企业官网的数据呈现方式不同，未验证的站点不会启用自动分页或批量刷新；
 - 职位信息反映最近一次成功核验的官网状态，投递前仍应打开返回的官方链接确认；
 - `/chat` 和 `/search` 尚未提供终端用户身份系统，公网多用户部署还需要身份层与 TLS；
+- Career Workspace 面向本机单用户使用，通过 12 小时 HttpOnly 会话保护；它不是线上账户或跨设备同步系统；
 - `/chat` 的五分钟幂等缓存适用于当前单进程部署，多实例运行需要共享协调层；
 - V2 工作台只对具备已审核结构化 JD 条目的系统岗位提供逐项状态，其他有效岗位和用户 JD 继续使用常规方向匹配；
-- 请求级材料不会跨会话保存，PDF、DOCX、账户体系和跨设备恢复尚未开放。
+- Career Skill 的请求级材料不会自动变成工作区行动；PDF、DOCX、个人知识库、账户体系和跨设备恢复尚未开放。
 
-v2.2.0 保持既有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和知识登记库结构不变。Redis、ChromaDB、Prometheus、Nginx 与知识登记库继续使用现有 volume 名称和挂载路径。V2 使用独立的证据登记路径，普通工作台请求不会写入该登记库。
+v2.3.0 保持既有 API 路径、Redis key、ChromaDB collection、CareerProfile Schema 和知识登记库结构不变。Career Workspace 使用独立的 SQLite 与 Docker volume，并兼容原有五卷备份。普通工作区操作不会写入画像、记忆、职位库或证据登记库。
 
 管理、调试、知识库、职位刷新和评测接口使用独立的 `X-Admin-Key`。应用、Redis、ChromaDB 和 Prometheus 的直连端口默认只绑定本机；外部招聘内容作为不可信事实背景处理，不能修改 Agent 身份、系统规则或工具权限。
 
@@ -324,6 +344,7 @@ ui/           求职工作台、交互脚本和品牌图标
 ## 项目文档
 
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v2.3.0 发布说明](docs/releases/notes/v2.3.0.md)
 - [Mako v2.2.0 发布说明](docs/releases/notes/v2.2.0.md)
 - [Mako v2.1.0 发布说明](docs/releases/notes/v2.1.0.md)
 - [Mako v2.0.0 发布说明](docs/releases/notes/v2.0.0.md)
@@ -335,4 +356,4 @@ ui/           求职工作台、交互脚本和品牌图标
 - [Mako v1.4.0 发布说明](docs/releases/notes/v1.4.0.md)
 - [Mako v1.3.0 发布说明](docs/releases/notes/v1.3.0.md)
 - [Mako v1.2.0 发布说明](docs/releases/notes/v1.2.0.md)
-- [Security Guide](SECURITY.md)
+- [安全说明](SECURITY.md)

@@ -34,7 +34,13 @@ jobs:
           python -m pip install pip-audit==2.10.1
 
       - name: Audit Python dependencies
-        run: python -m pip_audit -r requirements.txt
+        # ChromaDB 截至 2026-08-29 尚无修复这三项公告的正式版本。
+        # 仅保留精确例外；上游发布修复版本后移除。
+        run: |
+          python -m pip_audit -r requirements.txt \
+            --ignore-vuln CVE-2026-45830 \
+            --ignore-vuln CVE-2026-45831 \
+            --ignore-vuln CVE-2026-45833
 
       - name: Check Python syntax and imports
         run: python -m compileall -q agents api core evaluation mcp memory monitor tests tools

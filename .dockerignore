@@ -2,6 +2,7 @@
 .gitignore
 .idea
 .venv
+.venv-win/
 __pycache__
 *.py[cod]
 *.pyo
@@ -12,6 +13,7 @@ __pycache__
 .DS_Store
 *.log
 logs/
+backups/
 
 .env
 .env.*

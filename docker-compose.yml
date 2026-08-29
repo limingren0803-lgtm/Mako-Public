@@ -83,9 +83,12 @@ services:
     environment:
       # 容器内固定值，覆盖 .env 中的本地路径
       - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
       - CHROMA_PERSIST_DIRECTORY=/app/data/chroma
       - MAKO_KNOWLEDGE_REGISTRY_PATH=/app/data/knowledge/registry.sqlite3
       - MAKO_EVIDENCE_REGISTRY_PATH=/app/data/knowledge/evidence.sqlite3
+      - MAKO_CAREER_WORKSPACE_PATH=/app/data/workspace/workspace.sqlite3
       - EVAL_BASELINE_PATH=/app/data/eval/baseline.json
       - MAKO_SKILLS_DIR=/app/skills
       - ANONYMIZED_TELEMETRY=FALSE
@@ -93,6 +96,7 @@ services:
       - ./data/chroma:/app/data/chroma
       - ./data/eval:/app/data/eval
       - knowledge-registry-data:/app/data/knowledge
+      - career-workspace-data:/app/data/workspace
       - ./skills:/app/skills
       - ./logs:/app/logs
     depends_on:
@@ -148,6 +152,8 @@ volumes:
     name: mako_chromadb-data
   knowledge-registry-data:
     name: mako_knowledge-registry-data
+  career-workspace-data:
+    name: mako_career-workspace-data
   prometheus-data:
     name: mako_prometheus-data
   nginx-logs:

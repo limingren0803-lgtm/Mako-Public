@@ -14,9 +14,17 @@ def _sha256(path: Path) -> str:
 
 
 class PersistenceBackupValidationTests(unittest.TestCase):
-    def _create_backup(self, root: Path, *, unsafe: bool = False) -> Path:
+    def _create_backup(
+        self,
+        root: Path,
+        *,
+        unsafe: bool = False,
+        logical_names=None,
+    ) -> Path:
         archives = {}
-        for logical_name, volume_name in VOLUMES.items():
+        logical_names = logical_names or VOLUMES
+        for logical_name in logical_names:
+            volume_name = VOLUMES[logical_name]
             archive_path = root / f"{logical_name}.tar.gz"
             payload = f"{logical_name}-data".encode()
             member_name = "../escape" if unsafe and logical_name == "redis" else "data/file.txt"
@@ -53,6 +61,18 @@ class PersistenceBackupValidationTests(unittest.TestCase):
             manifest = validate_backup(backup_dir)
 
             self.assertEqual(set(VOLUMES), set(manifest["archives"]))
+
+    def test_pre_workspace_five_volume_backup_is_accepted(self):
+        legacy_names = [name for name in VOLUMES if name != "career_workspace"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_dir = self._create_backup(
+                Path(temp_dir),
+                logical_names=legacy_names,
+            )
+
+            manifest = validate_backup(backup_dir)
+
+            self.assertEqual(set(legacy_names), set(manifest["archives"]))
 
     def test_modified_archive_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:

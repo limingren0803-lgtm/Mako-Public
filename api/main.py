@@ -61,6 +61,8 @@ from core.v2_match_summary import (
     summarize_match_decisions,
 )
 from core.v2_requirements import RequirementReviewError, extract_requirement_drafts
+from core.career_workspace_registry import CareerWorkspaceRegistry
+from api.career_workspace import configure_workspace_api, router as career_workspace_router
 
 load_dotenv()
 
@@ -73,7 +75,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v2.2.0             ║
+   ║           Mako  v2.3.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -88,6 +90,7 @@ _monitor      = None
 _evaluator    = None
 _skill_manager = None
 _evidence_registry = None
+_career_workspace_registry = None
 
 def _anthropic_cfg() -> Dict[str, Any]:
     key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -105,7 +108,7 @@ def _anthropic_cfg() -> Dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager, _evidence_registry
+    global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager, _evidence_registry, _career_workspace_registry
 
     print(BANNER, flush=True)
 
@@ -183,6 +186,17 @@ async def lifespan(app: FastAPI):
             "/app/data/knowledge/evidence.sqlite3",
         )
     )
+    _career_workspace_registry = CareerWorkspaceRegistry(
+        os.getenv(
+            "MAKO_CAREER_WORKSPACE_PATH",
+            "/app/data/workspace/workspace.sqlite3",
+        )
+    )
+    configure_workspace_api(
+        _career_workspace_registry,
+        knowledge_provider=lambda: _knowledge_base_instance(),
+        evidence_provider=lambda: _v2_evidence_registry(),
+    )
 
     def knowledge_fallback(params: Dict[str, Any], context: Optional[Dict[str, Any]], error: str):
         query = params.get("query", "")
@@ -244,17 +258,18 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="2.2.0",
+    version="2.3.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
     openapi_url="/openapi.json" if _swagger_enabled else None,
 )
+app.include_router(career_workspace_router)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "Idempotency-Key", "X-Admin-Key", "X-Request-ID"],
     expose_headers=["X-Request-ID"],
     allow_credentials=False,

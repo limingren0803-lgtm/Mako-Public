@@ -168,7 +168,9 @@ class EvidenceApiTests(unittest.TestCase):
             "/v2/evidence",
             "/v2/confirmations",
         }
-        routes = {route.path: route for route in api_main.app.routes}
+        routes = {
+            route.path: route for route in api_main.app.routes if hasattr(route, "path")
+        }
         for path in protected:
             self.assertTrue(routes[path].dependencies, path)
 

@@ -235,12 +235,21 @@ class WorkspaceFlowTests(unittest.TestCase):
 
     def test_workspace_routes_do_not_require_or_accept_an_admin_key(self):
         routes = {
-            route.path: route
-            for route in api_main.app.routes
-            if route.path.startswith("/v2/workspace/")
+            route.path: route for route in api_main.app.routes if hasattr(route, "path")
         }
-        self.assertEqual(len(routes), 3)
-        self.assertTrue(all(not route.dependencies for route in routes.values()))
+        routes.update(
+            {route.path: route for route in api_main.career_workspace_router.routes}
+        )
+        request_local_paths = {
+            "/v2/workspace/jobs",
+            "/v2/workspace/jobs/{job_id}/versions/{version_id}/requirements",
+            "/v2/workspace/jobs/{job_id}/versions/{version_id}/match",
+        }
+        self.assertTrue(
+            all(not routes[path].dependencies for path in request_local_paths)
+        )
+        self.assertTrue(routes["/v2/workspace/tracks"].dependencies)
+        self.assertTrue(routes["/v2/workspace/actions"].dependencies)
 
 
 if __name__ == "__main__":
