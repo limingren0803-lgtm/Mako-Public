@@ -6,8 +6,8 @@
   <meta name="description" content="Mako 求职工作台">
   <title>Mako — AI Career Intelligence System</title>
   <link rel="icon" type="image/png" href="assets/mako-favicon.png">
-  <link rel="stylesheet" href="styles.css?v=3">
-  <link rel="stylesheet" href="workspace.css?v=1">
+  <link rel="stylesheet" href="styles.css?v=4">
+  <link rel="stylesheet" href="workspace.css?v=2">
 </head>
 <body>
   <header class="topbar">
@@ -24,6 +24,7 @@
         <button class="nav-item active" data-workspace-view="overview"><span>00</span><b>求职总览</b><small>今天先做什么</small></button>
         <button class="nav-item" data-workspace-view="tracks"><span>↗</span><b>目标岗位</b><small>跟进岗位与依据</small></button>
         <button class="nav-item" data-workspace-view="actions"><span>✓</span><b>今日行动</b><small>确认并完成任务</small></button>
+        <button class="nav-item" data-workspace-view="materials"><span>▤</span><b>个人材料库</b><small>保存并引用个人材料</small></button>
       </nav>
       <div class="sidebar-divider"></div>
       <p class="eyebrow">求职流程</p>
@@ -150,6 +151,86 @@
           </section>
         </section>
 
+        <section class="workspace-page" data-page="materials" hidden>
+          <div class="page-toolbar material-page-toolbar">
+            <div>
+              <p class="eyebrow">PERSONAL MATERIALS</p>
+              <h2>个人材料库</h2>
+              <p>把简历、项目文档和笔记保存在本机，后续分析只引用达到相关性要求的内容。</p>
+            </div>
+            <button class="secondary" id="export-materials" type="button">导出个人材料</button>
+          </div>
+
+          <div id="materials-message" class="workspace-message" role="status" aria-live="polite"></div>
+
+          <div class="material-intake-grid">
+            <section class="workspace-card material-upload-card">
+              <div class="workspace-card-heading">
+                <div><p class="eyebrow">ADD MATERIAL</p><h2>先预览，再决定是否保存</h2></div>
+                <span class="local-only-mark">仅保存在本机</span>
+              </div>
+              <div class="knowledge-upload-zone">
+                <input id="knowledge-file" type="file" accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                <label for="knowledge-file"><b>选择 TXT、Markdown、PDF 或 DOCX</b><span>文件会先完成安全解析；预览本身不会建立材料记录。</span></label>
+              </div>
+              <p id="knowledge-file-status" class="hint">单个文件不超过 10 MB。PDF 需要文本层且最多 200 页，解析文本最多 1,000,000 字符。</p>
+              <details class="material-boundaries">
+                <summary>查看支持范围与本地保存说明</summary>
+                <ul>
+                  <li>支持 UTF-8 TXT、Markdown、带文本层 PDF，以及 DOCX 正文和表格。</li>
+                  <li>扫描件、OCR、密码 PDF、DOC、DOCM 和伪造扩展名不会被导入。</li>
+                  <li>原始二进制文件不会长期保存，只保存解析文本、元数据与引用位置。</li>
+                  <li>文件中的链接不会被访问，材料内容也不会自动写入职业画像或求职进度。</li>
+                </ul>
+              </details>
+            </section>
+
+            <section id="material-preview" class="workspace-card material-preview" hidden>
+              <div class="workspace-card-heading">
+                <div><p class="eyebrow">PREVIEW</p><h2>解析预览</h2></div>
+                <span id="preview-file-type" class="source-pill">等待文件</span>
+              </div>
+              <div id="preview-stats" class="preview-stats"></div>
+              <div id="preview-warnings" class="material-warning-list" hidden></div>
+              <div id="preview-excerpts" class="preview-excerpts"></div>
+              <div class="preview-confirm-fields">
+                <label for="material-title">保存名称</label>
+                <input id="material-title" maxlength="200">
+                <label for="material-category">材料分类</label>
+                <select id="material-category">
+                  <option value="resume">简历</option>
+                  <option value="project">项目文档</option>
+                  <option value="course">课程材料</option>
+                  <option value="note">求职笔记</option>
+                  <option value="other">其他</option>
+                </select>
+              </div>
+              <p id="material-save-status" class="status-message" role="status"></p>
+              <div class="dialog-actions material-preview-actions">
+                <button id="discard-material-preview" class="secondary" type="button">放弃预览</button>
+                <button id="save-material" class="primary" type="button">确认并保存到本机</button>
+              </div>
+            </section>
+          </div>
+
+          <div class="material-workbench">
+            <aside class="workspace-card material-index" aria-label="个人材料列表">
+              <div class="material-filter-grid">
+                <div><label for="material-status-filter">使用状态</label><select id="material-status-filter"><option value="">全部状态</option><option value="active">使用中</option><option value="inactive">已停用</option></select></div>
+                <div><label for="material-category-filter">分类</label><select id="material-category-filter"><option value="">全部分类</option><option value="resume">简历</option><option value="project">项目文档</option><option value="course">课程材料</option><option value="note">求职笔记</option><option value="other">其他</option></select></div>
+              </div>
+              <div id="material-list" class="material-list"></div>
+            </aside>
+            <section id="material-detail" class="workspace-card material-detail">
+              <div class="workspace-empty">
+                <span>▤</span>
+                <h3>选择一份个人材料</h3>
+                <p>这里会显示保存状态、引用位置和解析内容，不会执行材料中的链接或 HTML。</p>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <dialog id="track-dialog" class="workspace-dialog">
           <form id="track-form" method="dialog">
             <div class="dialog-heading">
@@ -207,6 +288,19 @@
             <div class="dialog-actions"><button class="secondary" value="cancel" type="submit">取消</button><button id="save-action" class="primary" value="default" type="submit">保存行动</button></div>
           </form>
         </dialog>
+
+        <dialog id="material-delete-dialog" class="workspace-dialog material-delete-dialog">
+          <form id="material-delete-form" method="dialog">
+            <div class="dialog-heading">
+              <div><p class="eyebrow">PERMANENT DELETE</p><h2>永久删除个人材料</h2></div>
+              <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+            </div>
+            <p id="material-delete-impact" class="deletion-impact"></p>
+            <p class="hint">删除后，解析文本和对应索引块都无法恢复。这不会删除目标岗位、今日行动或职业画像。</p>
+            <p id="material-delete-status" class="status-message" role="status"></p>
+            <div class="dialog-actions"><button class="secondary" value="cancel" type="submit">取消</button><button id="confirm-delete-material" class="primary danger-button" value="default" type="submit">永久删除</button></div>
+          </form>
+        </dialog>
       </section>
 
       <div id="skill-workspace-view" hidden>
@@ -240,7 +334,19 @@
             <label for="material-file"><b id="upload-title">上传 TXT 或 Markdown 材料</b><span id="upload-description">可上传简历文本、JD 或经历说明；提交后将作为本次分析输入发送</span></label>
             <button id="clear-file" class="text-button" type="button" hidden>移除</button>
           </div>
-          <p id="file-status" class="hint">当前支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符。PDF 与 DOCX 暂未接入。</p>
+          <p id="file-status" class="hint">本次临时附件支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符；PDF 与 DOCX 请先保存到个人材料库。</p>
+
+          <fieldset class="personal-knowledge-choice">
+            <legend>本次是否使用个人材料</legend>
+            <label><input type="radio" name="personal-knowledge-mode" value="auto" checked><span><b>自动查找相关材料</b><small>只使用达到相关性要求、处于使用中且可检索的内容</small></span></label>
+            <label><input type="radio" name="personal-knowledge-mode" value="selected"><span><b>只使用指定材料</b><small>从个人材料库中选择最多 20 份材料</small></span></label>
+            <label><input type="radio" name="personal-knowledge-mode" value="off"><span><b>本次不使用</b><small>仅使用当前输入和现有求职信息</small></span></label>
+          </fieldset>
+          <div id="personal-material-picker" class="personal-material-picker" hidden>
+            <div id="personal-material-options" class="personal-material-options"></div>
+            <p id="personal-material-picker-status" class="hint">正在读取可用材料…</p>
+          </div>
+          <p id="personal-knowledge-hint" class="hint personal-knowledge-hint">Mako 会自动查找相关内容；如果没有达到相关性要求，本次分析不会引用个人材料。</p>
 
           <details class="advanced" id="job-options">
             <summary>岗位信息与分析范围</summary>
@@ -258,7 +364,7 @@
 
               <div id="verified-job-panel" class="source-panel">
                 <div class="job-search">
-                  <input id="job-query" type="search" maxlength="200" placeholder="搜索公司、岗位或城市">
+                  <input id="job-query" type="search" maxlength="200" aria-label="搜索已核验岗位" placeholder="搜索公司、岗位或城市">
                   <button id="load-jobs" class="secondary" type="button">查找岗位</button>
                 </div>
                 <label for="job-select">目标岗位</label>
@@ -304,6 +410,7 @@
             <div class="card-heading"><div><p class="eyebrow">OUTPUT</p><h2>分析结果</h2></div><span class="result-state" id="result-state">等待材料</span></div>
             <div id="empty-output" class="empty">完成材料确认后，结果会显示在这里。</div>
             <div id="result" class="result" hidden></div>
+            <section id="personal-result-sources" class="personal-result-sources" hidden aria-label="本次使用的个人材料"></section>
             <div id="result-actions" class="result-actions" hidden>
               <button id="copy-result" class="secondary" type="button">复制结果</button>
               <button id="download-result" class="secondary" type="button">下载 TXT</button>
@@ -316,7 +423,8 @@
       </div>
     </main>
   </div>
-  <script src="app.js?v=3" defer></script>
-  <script src="workspace.js?v=1" defer></script>
+  <script src="app.js?v=4" defer></script>
+  <script src="workspace.js?v=2" defer></script>
+  <script src="materials.js?v=1" defer></script>
 </body>
 </html>

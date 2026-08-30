@@ -9,6 +9,8 @@ starlette==1.6.0          # FastAPI HTTP 基础层；显式固定以便安全审
 uvicorn[standard]==0.32.1
 pydantic==2.10.3
 python-multipart==0.0.31    # FastAPI 文件上传支持
+pypdf==6.16.2               # 个人材料 PDF 文本层解析，不包含 OCR
+python-docx==1.2.0          # 个人材料 DOCX 正文与表格解析
 
 # ── 数据存储 ──────────────────────────────────────────────────────────────────
 redis==5.2.1

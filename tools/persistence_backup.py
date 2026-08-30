@@ -238,12 +238,23 @@ def restore_check(backup_dir: Path) -> None:
                         APPLICATION_IMAGE,
                         "-c",
                         (
-                            "import sqlite3; "
+                            "import pathlib, sqlite3; "
                             "c=sqlite3.connect("
                             "'file:/restore/workspace.sqlite3?mode=ro&immutable=1', uri=True); "
                             "assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; "
                             "assert not c.execute('PRAGMA foreign_key_check').fetchall(); "
                             "assert c.execute('SELECT schema_version FROM workspace_schema "
+                            "WHERE singleton=1').fetchone()[0]==1; "
+                            "p=pathlib.Path('/restore/personal_knowledge.sqlite3'); "
+                            "k=sqlite3.connect("
+                            "'file:/restore/personal_knowledge.sqlite3?mode=ro&immutable=1', "
+                            "uri=True) if p.exists() else None; "
+                            "assert k is None or "
+                            "k.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; "
+                            "assert k is None or not "
+                            "k.execute('PRAGMA foreign_key_check').fetchall(); "
+                            "assert k is None or k.execute("
+                            "'SELECT schema_version FROM personal_knowledge_schema "
                             "WHERE singleton=1').fetchone()[0]==1"
                         ),
                     ],

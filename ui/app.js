@@ -162,6 +162,7 @@
     resultActions.hidden = true;
     resultActionStatus.textContent = "";
     resultState.textContent = "等待材料";
+    window.MakoMaterials?.clearSources();
   };
 
   const renderList = (target, items, ordered = false) => {
@@ -369,7 +370,7 @@
     fileInput.value = "";
     fileText = "";
     clearFile.hidden = true;
-    fileStatus.textContent = "当前支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符。PDF 与 DOCX 暂未接入。";
+    fileStatus.textContent = "本次临时附件支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符；PDF 与 DOCX 请先保存到个人材料库。";
     fileStatus.classList.remove("error");
     evidenceDetail.value = "";
     manualJd.value = "";
@@ -382,6 +383,10 @@
     requirementList.replaceChildren();
     const verifiedSource = document.querySelector('input[name="match-source"][value="verified"]');
     if (verifiedSource) verifiedSource.checked = true;
+    const automaticKnowledge = document.querySelector('input[name="personal-knowledge-mode"][value="auto"]');
+    if (automaticKnowledge) automaticKnowledge.checked = true;
+    document.getElementById("personal-material-picker").hidden = true;
+    document.getElementById("personal-knowledge-hint").textContent = "Mako 会自动查找相关内容；如果没有达到相关性要求，本次分析不会引用个人材料。";
     if (activeSkill === "career_match") updateMatchSource();
     setSubmitStatus();
     resetOutput();
@@ -549,6 +554,13 @@
 
   submit.addEventListener("click", async () => {
     setSubmitStatus();
+    let personalSelection;
+    try {
+      personalSelection = window.MakoMaterials.selection();
+    } catch (error) {
+      setSubmitStatus(error.message, "error");
+      return;
+    }
     const manualMatch = activeSkill === "career_match" && matchSource() === "manual";
     if (!request.value.trim() && !fileText.trim() && !evidenceDetail.value.trim() && !manualJd.value.trim()) {
       setSubmitStatus("请填写问题、经历材料或目标 JD。", "error");
@@ -579,10 +591,6 @@
         setSubmitStatus("请至少保留一项需要核对的岗位要求。", "error");
         return;
       }
-      if (!evidence.length) {
-        setSubmitStatus("逐项匹配需要填写已确认经历或上传材料。", "error");
-        return;
-      }
       if (evidence.length > 20 || evidence.reduce((total, item) => total + item.length, 0) > 20000) {
         setSubmitStatus("本次经历材料超过 20 项或 20000 字符，请缩短后重试。", "error");
         return;
@@ -595,6 +603,21 @@
       submit.disabled = true;
       setSubmitStatus("正在逐项核对，请不要重复提交。", "busy");
       try {
+        const selectedRequirements = [...requirementList.querySelectorAll("input:checked")]
+          .map(input => input.closest(".requirement-option")?.querySelector("label span")?.textContent || "")
+          .filter(Boolean);
+        const personalHits = await window.MakoMaterials.search([request.value.trim(), ...selectedRequirements].filter(Boolean).join("\n"));
+        const usedHits = [];
+        let evidenceCharacters = evidence.reduce((total, item) => total + item.length, 0);
+        personalHits.forEach(hit => {
+          const value = `个人材料 ${hit.title}（${hit.locator_label}）：${hit.excerpt}`;
+          if (evidence.length < 20 && evidenceCharacters + value.length <= 20000) {
+            evidence.push(value);
+            evidenceCharacters += value.length;
+            usedHits.push(hit);
+          }
+        });
+        if (!evidence.length) throw new Error("逐项匹配需要填写已确认经历、上传本次材料，或选择一份相关的个人材料。");
         const url = `/v2/workspace/jobs/${encodeURIComponent(job.job_id)}/versions/${encodeURIComponent(job.job_version_id)}/match`;
         const response = await fetch(url, {
           method: "POST",
@@ -610,6 +633,7 @@
         const payload = await readResponse(response);
         if (!response.ok) throw new Error(responseMessage(payload));
         renderStructuredResult(payload, skill);
+        window.MakoMaterials.renderSources(usedHits, usedHits.length > 0, personalSelection.mode);
         markResultReady();
         setSubmitStatus("逐项匹配完成。", "success");
         updateFlow(4);
@@ -655,19 +679,19 @@
         conv_id: conversationId,
         career_intent: activeSkill,
         job_max_age_days: Number(document.getElementById("job-age").value),
-        job_data_mode: document.getElementById("job-mode").value
+        job_data_mode: document.getElementById("job-mode").value,
+        personal_knowledge_mode: personalSelection.mode,
+        personal_material_ids: personalSelection.ids
       });
       const idempotencyKey = retryChatRequest?.body === body
         ? retryChatRequest.key
         : `chat_${crypto.randomUUID().replaceAll("-", "")}`;
       retryChatRequest = {body, key: idempotencyKey};
-      const response = await fetch("/chat", {
+      const payload = await window.MakoWorkspace.fetch("/analyze", {
         method: "POST",
         headers: {"Content-Type": "application/json", "Idempotency-Key": idempotencyKey},
         body
       });
-      const payload = await readResponse(response);
-      if (!response.ok) throw new Error(payload?.error?.message || "请求未完成");
       conversationId = payload.conv_id;
       retryChatRequest = null;
       result.replaceChildren();
@@ -676,6 +700,7 @@
       meta.className = "result-meta";
       meta.textContent = `处理板块：${skill.title} · 请求编号：${payload.request_id}`;
       result.appendChild(meta);
+      window.MakoMaterials.renderSources(payload.personal_knowledge_sources, payload.personal_knowledge_used, personalSelection.mode);
       markResultReady();
       setSubmitStatus("分析完成。", "success");
       updateFlow(4);

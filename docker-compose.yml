@@ -89,6 +89,7 @@ services:
       - MAKO_KNOWLEDGE_REGISTRY_PATH=/app/data/knowledge/registry.sqlite3
       - MAKO_EVIDENCE_REGISTRY_PATH=/app/data/knowledge/evidence.sqlite3
       - MAKO_CAREER_WORKSPACE_PATH=/app/data/workspace/workspace.sqlite3
+      - MAKO_PERSONAL_KNOWLEDGE_PATH=/app/data/workspace/personal_knowledge.sqlite3
       - EVAL_BASELINE_PATH=/app/data/eval/baseline.json
       - MAKO_SKILLS_DIR=/app/skills
       - ANONYMIZED_TELEMETRY=FALSE

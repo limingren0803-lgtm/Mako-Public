@@ -24,7 +24,8 @@
   const viewCopy = {
     overview: ["今天先完成真正影响进度的事", "目标岗位、判断依据和下一步行动集中在这里，六项分析结果不再停留在一次对话里。"],
     tracks: ["每个目标岗位都有一条清楚的进度线", "保留职位来源、当前阶段和关联行动，避免在不同分析板块之间重复整理同一份 JD。"],
-    actions: ["把分析结果变成可以完成的下一步", "每项行动都说明完成标准，由你决定何时开始、完成或重新打开。"]
+    actions: ["把分析结果变成可以完成的下一步", "每项行动都说明完成标准，由你决定何时开始、完成或重新打开。"],
+    materials: ["让个人材料在需要时提供依据", "材料先预览、再保存；后续分析只使用你启用且达到相关性要求的内容。"]
   };
 
   const state = {
@@ -55,6 +56,7 @@
 
   const responseMessage = payload => {
     if (typeof payload?.detail === "string") return payload.detail;
+    if (typeof payload?.detail?.message === "string") return payload.detail.message;
     if (Array.isArray(payload?.detail)) return payload.detail[0]?.msg || "输入内容不符合要求";
     return payload?.error?.message || "请求未完成";
   };
@@ -98,6 +100,8 @@
     if (!response.ok) throw new Error(responseMessage(payload));
     return payload;
   };
+
+  window.MakoWorkspace = Object.freeze({fetch: workspaceFetch, ensureSession: startSession});
 
   const textElement = (tag, text, className = "") => {
     const element = document.createElement(tag);
@@ -472,6 +476,7 @@
     document.getElementById("workspace-view-description").textContent = viewCopy[page][1];
     if (page === "actions") renderActions();
     if (page === "tracks") renderTracks();
+    if (page === "materials") window.MakoMaterials?.load();
   };
 
   const switchToSkill = () => {

@@ -63,6 +63,12 @@ from core.v2_match_summary import (
 from core.v2_requirements import RequirementReviewError, extract_requirement_drafts
 from core.career_workspace_registry import CareerWorkspaceRegistry
 from api.career_workspace import configure_workspace_api, router as career_workspace_router
+from core.personal_knowledge_index import PersonalKnowledgeIndex
+from core.personal_knowledge_registry import PersonalKnowledgeRegistry
+from api.personal_knowledge import (
+    configure_personal_knowledge_api,
+    router as personal_knowledge_router,
+)
 
 load_dotenv()
 
@@ -75,7 +81,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v2.3.0             ║
+   ║           Mako  v2.4.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -91,6 +97,8 @@ _evaluator    = None
 _skill_manager = None
 _evidence_registry = None
 _career_workspace_registry = None
+_personal_knowledge_registry = None
+_personal_knowledge_index = None
 
 def _anthropic_cfg() -> Dict[str, Any]:
     key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -108,7 +116,7 @@ def _anthropic_cfg() -> Dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager, _evidence_registry, _career_workspace_registry
+    global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager, _evidence_registry, _career_workspace_registry, _personal_knowledge_registry, _personal_knowledge_index
 
     print(BANNER, flush=True)
 
@@ -197,6 +205,23 @@ async def lifespan(app: FastAPI):
         knowledge_provider=lambda: _knowledge_base_instance(),
         evidence_provider=lambda: _v2_evidence_registry(),
     )
+    _personal_knowledge_registry = PersonalKnowledgeRegistry(
+        os.getenv(
+            "MAKO_PERSONAL_KNOWLEDGE_PATH",
+            "/app/data/workspace/personal_knowledge.sqlite3",
+        )
+    )
+    _personal_knowledge_index = PersonalKnowledgeIndex(
+        chroma_host=os.getenv("CHROMA_HOST", "chromadb"),
+        chroma_port=int(os.getenv("CHROMA_PORT", "8000")),
+        chroma_path=os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/data/chroma"),
+        allow_local_chroma_fallback=False,
+    )
+    configure_personal_knowledge_api(
+        _personal_knowledge_registry,
+        _personal_knowledge_index,
+        analysis_provider=_run_personal_knowledge_analysis,
+    )
 
     def knowledge_fallback(params: Dict[str, Any], context: Optional[Dict[str, Any]], error: str):
         query = params.get("query", "")
@@ -258,13 +283,14 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="2.3.0",
+    version="2.4.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
     openapi_url="/openapi.json" if _swagger_enabled else None,
 )
 app.include_router(career_workspace_router)
+app.include_router(personal_knowledge_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -665,7 +691,12 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         raise
 
 
-async def _run_chat(req: ChatRequest, http_request: FastAPIRequest):
+async def _run_chat(
+    req: ChatRequest,
+    http_request: FastAPIRequest,
+    *,
+    additional_context: str = "",
+):
     """
     主对话接口。完整流程：
       记忆读取 → 意图识别 → Agent 路由 → 执行 → 记忆写入
@@ -720,6 +751,8 @@ async def _run_chat(req: ChatRequest, http_request: FastAPIRequest):
         context_parts.append(knowledge_text)
     if job_text:
         context_parts.append(job_text)
+    if additional_context:
+        context_parts.append(additional_context)
     full_context = "\n\n".join(part for part in context_parts if part)
 
     orch_req = OrcReq(
@@ -764,6 +797,19 @@ async def _run_chat(req: ChatRequest, http_request: FastAPIRequest):
         response_complete=result.response_complete,
         continuation_used=result.continuation_used,
         quality_flags=result.quality_flags,
+    )
+
+
+async def _run_personal_knowledge_analysis(
+    payload: Dict[str, Any],
+    http_request: FastAPIRequest,
+    personal_context: str,
+):
+    """Reuse the complete chat path while keeping personal context opt-in."""
+    return await _run_chat(
+        ChatRequest.model_validate(payload),
+        http_request,
+        additional_context=personal_context,
     )
 
 
