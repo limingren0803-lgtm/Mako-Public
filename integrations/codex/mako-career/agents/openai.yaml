@@ -1,0 +1,8 @@
+interface:
+  display_name: "Mako Career"
+  short_description: "基于真实材料完成求职分析，说明依据、缺口与下一步行动"
+  brand_color: "#6479B8"
+  default_prompt: "使用 $mako-career 分析我陈述或提供的求职信息，告诉我当前结论、判断依据、信息缺口和下一步行动。"
+
+policy:
+  allow_implicit_invocation: true

@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="#不启动完整系统也可以先试试-mako">使用 Mako Skill</a> ·
   <a href="#快速启动">快速启动</a> ·
   <a href="#从背景梳理到行动计划">查看求职流程</a> ·
   <a href="#工程实现">工程实现</a>
@@ -67,6 +68,30 @@ Mako 处理的不只是一份简历，而是求职过程中一连串相互关联
 | 6. 安排行动 | 行动规划 | 结合目标、差距和时间，安排投递、准备与能力补强 |
 
 前一步形成的判断，会成为后一步的输入：岗位方向决定需要重点查看哪些 JD，JD 中的要求决定简历和面试应当准备哪些证据，尚未覆盖的要求则进入后续行动计划。
+
+## 不启动完整系统，也可以先试试 Mako
+
+如果你只想分析一份简历、看懂一份 JD，或者梳理当前求职方向，可以把 Mako Career Skill 安装到 Codex。它不需要启动 Docker、数据库或 Mako Workspace，也不要求单独配置 Mako API Key。
+
+在 Codex 中调用 `$skill-installer`，并提供下面的 GitHub 地址：
+
+```text
+使用 $skill-installer 从下面的 GitHub 路径安装 mako-career：
+
+https://github.com/limingren0803-lgtm/Mako-Public/tree/main/integrations/codex/mako-career
+```
+
+安装后可以直接说：
+
+```text
+使用 $mako-career，根据我下面的背景判断适合优先了解哪些岗位方向。
+```
+
+也可以上传简历、JD、项目材料或求职笔记，然后询问是否值得投、如何调整简历、怎样准备面试，或者接下来两周应该先做什么。用户不需要判断应当选择哪个内部流程，Skill 会根据最终需要的结果选择最小必要流程。
+
+轻量版只处理当前 Codex 对话，不连接 Mako 后端，也不会把材料另行写入 Mako Workspace。当前对话、附件和模型用量仍遵循用户所在 Codex 环境的规则。需要跨会话保存材料、管理多个岗位、跟踪投递阶段或使用已审核官方职位记录时，可以再使用完整的 Mako Workspace。
+
+完整的安装方法、文件兼容范围和常见问题见 [Mako Career Skill 使用指南](docs/guides/mako-career-skill.md)。
 
 ## 把分析变成接下来要做的事
 
@@ -353,6 +378,7 @@ ui/           求职工作台、交互脚本和品牌图标
 
 ## 项目文档
 
+- [Mako Career Skill 使用指南](docs/guides/mako-career-skill.md)
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
 - [Mako v2.4.0 发布说明](docs/releases/notes/v2.4.0.md)
 - [Mako v2.3.0 发布说明](docs/releases/notes/v2.3.0.md)
