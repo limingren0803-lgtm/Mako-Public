@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from anthropic import AsyncAnthropic
 
-from core.llm_utils import extract_text_content
+from core.llm_utils import extract_json_value, extract_text_content
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ class MCPToolManager:
       用户查询 → 查询改写（多角度子查询）→ 并行召回 → 结果重排 → 返回 Top-K
     """
 
-    def __init__(self, api_key: str, base_url: Optional[str] = None, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: str, base_url: Optional[str] = None, model: str = "claude-sonnet-4-6"):
         kwargs: Dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -230,8 +230,12 @@ class MCPToolManager:
             tool.stats.failed += 1
             tool.stats.consecutive_fails += 1
             tool.breaker.record_failure()
-            logger.error(f"工具异常: {name} — {ex}")
-            return await self._fallback_result(tool, params, context, str(ex))
+            logger.error(
+                "工具异常: tool=%s error_type=%s",
+                name,
+                type(ex).__name__,
+            )
+            return await self._fallback_result(tool, params, context, "工具执行失败")
 
     async def _fallback_result(
         self,
@@ -254,8 +258,12 @@ class MCPToolManager:
                 error=error,
             )
         except Exception as ex:
-            logger.error(f"工具降级失败: {tool.name} — {ex}")
-            return ToolResult(success=False, data=None, tool_name=tool.name, error=f"{error}; fallback失败: {ex}")
+            logger.error(
+                "工具降级失败: tool=%s error_type=%s",
+                tool.name,
+                type(ex).__name__,
+            )
+            return ToolResult(success=False, data=None, tool_name=tool.name, error=f"{error}; fallback 失败")
 
     # ── 查询改写（解决召回不全）────────────────────────────────────────────────
 
@@ -281,12 +289,11 @@ class MCPToolManager:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = extract_text_content(resp.content)
-            s, e = raw.find("["), raw.rfind("]") + 1
-            queries = json.loads(raw[s:e])
+            queries = extract_json_value(raw, list)
             # 原始查询也保留，去重
             return list(dict.fromkeys([query] + queries))
         except Exception as ex:
-            logger.warning(f"查询改写失败，使用原始查询: {ex}")
+            logger.warning("查询改写失败，使用原始查询: error_type=%s", type(ex).__name__)
             return [query]
 
     async def search_with_rewrite(
@@ -360,12 +367,11 @@ class MCPToolManager:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = extract_text_content(resp.content)
-            s, e = raw.find("["), raw.rfind("]") + 1
-            order: List[int] = json.loads(raw[s:e])
+            order: List[int] = extract_json_value(raw, list)
             reranked = [items[i] for i in order if 0 <= i < len(items)]
             return reranked[:top_k]
         except Exception as ex:
-            logger.warning(f"重排失败，返回原始顺序: {ex}")
+            logger.warning("重排失败，返回原始顺序: error_type=%s", type(ex).__name__)
             return items[:top_k]
 
     # ── 缓存 ──────────────────────────────────────────────────────────────────

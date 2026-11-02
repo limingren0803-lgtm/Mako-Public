@@ -21,7 +21,7 @@ from core.v2_requirements import extract_requirement_drafts
 from mcp.knowledge_registry import KnowledgeRegistry
 
 
-NOW = datetime(2026, 8, 13, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc)
 
 
 def posting(**overrides: object) -> JobPosting:
@@ -53,6 +53,8 @@ class WorkspaceFlowTests(unittest.TestCase):
             source_url="https://careers.example.com",
             job_source_url="https://careers.example.com/jobs",
             support_level="structured_import",
+            industry="互联网与科技",
+            company_type="民营企业",
         )
         self.job = self.jobs.upsert_job_posting(posting(), review_status="approved")
         self.version_id = self.job["submitted_version_id"]
@@ -129,6 +131,8 @@ class WorkspaceFlowTests(unittest.TestCase):
         item = payload["items"][0]
         self.assertTrue(item["match_ready"])
         self.assertEqual(item["requirement_count"], 2)
+        self.assertEqual(item["industry"], "互联网与科技")
+        self.assertEqual(item["company_type"], "民营企业")
         self.assertNotIn("payload", item)
         self.assertNotIn("review_notes", item)
 

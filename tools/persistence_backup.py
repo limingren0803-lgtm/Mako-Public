@@ -226,7 +226,7 @@ def restore_check(backup_dir: Path) -> None:
             if not restored_entry:
                 raise RuntimeError(f"Restore check produced an empty {logical_name} volume.")
             if logical_name == "career_workspace":
-                _run(
+                report = _run(
                     [
                         docker,
                         "run",
@@ -244,7 +244,7 @@ def restore_check(backup_dir: Path) -> None:
                             "assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; "
                             "assert not c.execute('PRAGMA foreign_key_check').fetchall(); "
                             "assert c.execute('SELECT schema_version FROM workspace_schema "
-                            "WHERE singleton=1').fetchone()[0]==1; "
+                            "WHERE singleton=1').fetchone()[0] in (1, 2); "
                             "p=pathlib.Path('/restore/personal_knowledge.sqlite3'); "
                             "k=sqlite3.connect("
                             "'file:/restore/personal_knowledge.sqlite3?mode=ro&immutable=1', "
@@ -255,7 +255,7 @@ def restore_check(backup_dir: Path) -> None:
                             "k.execute('PRAGMA foreign_key_check').fetchall(); "
                             "assert k is None or k.execute("
                             "'SELECT schema_version FROM personal_knowledge_schema "
-                            "WHERE singleton=1').fetchone()[0]==1"
+                            "WHERE singleton=1').fetchone()[0] in (1, 2, 3)"
                         ),
                     ],
                     capture=True,

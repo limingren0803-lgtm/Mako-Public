@@ -87,6 +87,197 @@ class ActionPriority(str, Enum):
     LOW = "low"
 
 
+class CareerTaskIntent(str, Enum):
+    PROFILE = "career_profile"
+    MATCH = "career_match"
+    JD = "career_jd"
+    RESUME = "career_resume"
+    INTERVIEW = "career_interview"
+    PLANNING = "career_planning"
+
+
+class CareerTaskStatus(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class CareerTaskAnalysisStatus(str, Enum):
+    NOT_STARTED = "not_started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class CareerTaskSourceKind(str, Enum):
+    PERSONAL_MATERIAL = "personal_material"
+    JOB_TRACK = "job_track"
+    REVIEWED_JOB = "reviewed_job"
+
+
+class CareerTaskSourceReference(BaseModel):
+    kind: CareerTaskSourceKind
+    reference_id: str = Field(min_length=1, max_length=256)
+    locators: List[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("reference_id")
+    @classmethod
+    def validate_reference_id(cls, value: str) -> str:
+        return validate_workspace_id(value, "reference_id")
+
+    @field_validator("locators", mode="before")
+    @classmethod
+    def normalize_locators(cls, value: object) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple, set)):
+            raise ValueError("locators must be a list")
+        result: List[str] = []
+        for item in value:
+            clean = normalize_text(str(item))
+            if clean and clean not in result:
+                if len(clean) > 500:
+                    raise ValueError("locator exceeds 500 characters")
+                result.append(clean)
+        return result
+
+
+class CareerTaskMaterialConfirmation(BaseModel):
+    material_id: str = Field(min_length=1, max_length=128)
+    revision: int = Field(ge=1)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("material_id")
+    @classmethod
+    def validate_material_id(cls, value: str) -> str:
+        return validate_workspace_id(value, "material_id")
+
+
+class CareerTask(BaseModel):
+    schema_version: str = "2.6"
+    task_id: str = Field(min_length=1, max_length=128)
+    goal: str = Field(min_length=1, max_length=500)
+    career_intent: CareerTaskIntent
+    status: CareerTaskStatus = CareerTaskStatus.ACTIVE
+    track_id: Optional[str] = Field(default=None, max_length=128)
+    job_id: Optional[str] = Field(default=None, max_length=128)
+    job_version_id: Optional[str] = Field(default=None, max_length=128)
+    job_max_age_days: int = Field(default=30, ge=1, le=90)
+    job_data_mode: str = Field(
+        default="verified_only", pattern="^(verified_only|official_links_if_missing)$"
+    )
+    personal_knowledge_mode: str = Field(default="auto", pattern="^(auto|selected|off)$")
+    personal_material_ids: List[str] = Field(default_factory=list, max_length=20)
+    personal_material_confirmations: List[CareerTaskMaterialConfirmation] = Field(
+        default_factory=list, max_length=20
+    )
+    resume_material_id: Optional[str] = Field(default=None, max_length=128)
+    resume_material_confirmation: Optional[CareerTaskMaterialConfirmation] = None
+    last_analysis_status: CareerTaskAnalysisStatus = CareerTaskAnalysisStatus.NOT_STARTED
+    last_analysis_request_id: Optional[str] = Field(default=None, max_length=128)
+    last_analysis_intent: Optional[CareerTaskIntent] = None
+    last_analysis_sources: List[CareerTaskSourceReference] = Field(default_factory=list, max_length=50)
+    last_analysis_at: Optional[datetime] = None
+    saved_analysis_text: Optional[str] = Field(default=None, max_length=100_000)
+    saved_analysis_request_id: Optional[str] = Field(default=None, max_length=128)
+    saved_analysis_intent: Optional[CareerTaskIntent] = None
+    saved_analysis_sources: List[CareerTaskSourceReference] = Field(default_factory=list, max_length=50)
+    saved_analysis_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    revision: int = Field(default=1, ge=1)
+
+    @field_validator(
+        "task_id", "track_id", "job_id", "job_version_id",
+        "resume_material_id", "last_analysis_request_id", "saved_analysis_request_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: Optional[str], info) -> Optional[str]:
+        return validate_workspace_id(value, info.field_name) if value is not None else None
+
+    @field_validator("goal", "saved_analysis_text")
+    @classmethod
+    def normalize_task_text(cls, value: Optional[str], info) -> Optional[str]:
+        if value is None:
+            return None
+        if info.field_name == "saved_analysis_text":
+            clean = value.strip()
+            return clean or None
+        return normalize_text(value)
+
+    @field_validator("personal_material_ids")
+    @classmethod
+    def validate_material_ids(cls, values: List[str]) -> List[str]:
+        result: List[str] = []
+        for value in values:
+            item = validate_workspace_id(value, "material_id")
+            if item not in result:
+                result.append(item)
+        return result
+
+    @field_validator(
+        "last_analysis_at", "saved_analysis_at", "archived_at", "created_at", "updated_at",
+    )
+    @classmethod
+    def require_aware_datetime(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("timestamp must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def validate_task_state(self) -> "CareerTask":
+        if bool(self.job_id) != bool(self.job_version_id):
+            raise ValueError("reviewed job requires job_id and job_version_id")
+        if self.track_id and self.job_id:
+            raise ValueError("task must reference either a track or a reviewed job version")
+        if self.personal_knowledge_mode == "selected" and not self.personal_material_ids:
+            raise ValueError("selected mode requires personal_material_ids")
+        if self.personal_knowledge_mode != "selected" and self.personal_material_ids:
+            raise ValueError("personal_material_ids are only accepted in selected mode")
+        confirmed_ids = [item.material_id for item in self.personal_material_confirmations]
+        if len(confirmed_ids) != len(set(confirmed_ids)):
+            raise ValueError("personal material confirmations must be unique")
+        if self.personal_material_confirmations and (
+            self.personal_knowledge_mode != "selected"
+            or confirmed_ids != self.personal_material_ids
+        ):
+            raise ValueError("personal material confirmations must match selected materials")
+        if bool(self.resume_material_id) != bool(self.resume_material_confirmation):
+            raise ValueError("resume material requires a matching confirmation")
+        if (
+            self.resume_material_confirmation
+            and self.resume_material_confirmation.material_id != self.resume_material_id
+        ):
+            raise ValueError("resume material confirmation must match the selected resume")
+        if self.status == CareerTaskStatus.ARCHIVED:
+            if self.archived_at is None:
+                raise ValueError("archived task requires archived_at")
+        elif self.archived_at is not None:
+            raise ValueError("archived_at is only valid for archived tasks")
+        analysis_fields = (
+            self.last_analysis_request_id,
+            self.last_analysis_intent,
+            self.last_analysis_at,
+        )
+        if self.last_analysis_status == CareerTaskAnalysisStatus.NOT_STARTED:
+            if any(value is not None for value in analysis_fields) or self.last_analysis_sources:
+                raise ValueError("not_started task must not contain analysis metadata")
+        elif any(value is None for value in analysis_fields):
+            raise ValueError("analysis status requires request, intent and timestamp")
+        saved_fields = (
+            self.saved_analysis_request_id,
+            self.saved_analysis_intent,
+            self.saved_analysis_at,
+        )
+        if self.saved_analysis_text is None:
+            if any(value is not None for value in saved_fields) or self.saved_analysis_sources:
+                raise ValueError("saved analysis metadata requires saved_analysis_text")
+        elif any(value is None for value in saved_fields):
+            raise ValueError("saved analysis requires request, intent and timestamp")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot be earlier than created_at")
+        return self
+
+
 class WorkspaceRequirementSnapshot(BaseModel):
     requirement_id: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=4_000)
@@ -212,6 +403,7 @@ class JobTrack(BaseModel):
 class ActionItem(BaseModel):
     schema_version: str = "2.3"
     action_id: str = Field(min_length=1, max_length=128)
+    task_id: Optional[str] = Field(default=None, max_length=128)
     track_id: Optional[str] = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=300)
     reason: Optional[str] = Field(default=None, max_length=2_000)
@@ -229,7 +421,7 @@ class ActionItem(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
     revision: int = Field(default=1, ge=1)
 
-    @field_validator("action_id", "track_id")
+    @field_validator("action_id", "task_id", "track_id")
     @classmethod
     def validate_identifiers(cls, value: Optional[str], info) -> Optional[str]:
         return validate_workspace_id(value, info.field_name) if value is not None else None

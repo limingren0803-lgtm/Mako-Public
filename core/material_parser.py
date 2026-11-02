@@ -9,6 +9,7 @@ import zipfile
 from pathlib import PurePosixPath, PureWindowsPath
 
 from docx import Document
+from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
@@ -185,20 +186,21 @@ def _parse_docx(filename: str, content: bytes) -> ExtractedMaterial:
         sections: list[ExtractedSection] = []
         paragraph_number = 0
         table_number = 0
+        textbox_number = 0
+        mc = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
         for block in document.iter_inner_content():
             if isinstance(block, Paragraph):
                 paragraph_number += 1
                 text = _normalize_text(block.text)
-                if not text:
-                    continue
-                style = (block.style.name if block.style else "").casefold()
-                heading = style.startswith("heading")
-                sections.append(ExtractedSection(
-                    ordinal=len(sections),
-                    locator_type=LocatorType.HEADING if heading else LocatorType.PARAGRAPH,
-                    locator_label=text[:200] if heading else f"段落 {paragraph_number}",
-                    text=text,
-                ))
+                if text:
+                    style = (block.style.name if block.style else "").casefold()
+                    heading = style.startswith("heading")
+                    sections.append(ExtractedSection(
+                        ordinal=len(sections),
+                        locator_type=LocatorType.HEADING if heading else LocatorType.PARAGRAPH,
+                        locator_label=text[:200] if heading else f"段落 {paragraph_number}",
+                        text=text,
+                    ))
             elif isinstance(block, Table):
                 table_number += 1
                 rows = [" | ".join(_normalize_text(cell.text) for cell in row.cells) for row in block.rows]
@@ -210,6 +212,28 @@ def _parse_docx(filename: str, content: bytes) -> ExtractedMaterial:
                         locator_label=f"表格 {table_number}",
                         text=text,
                     ))
+            for box in block._element.xpath(".//w:txbxContent"):
+                alternate = next(box.iterancestors(f"{mc}AlternateContent"), None)
+                if alternate is not None:
+                    chosen = next((
+                        child for child in alternate
+                        if child.tag == f"{mc}Choice"
+                        and next(child.iter(qn("w:txbxContent")), None) is not None
+                    ), None)
+                    if chosen is None:
+                        chosen = next((child for child in alternate if child.tag == f"{mc}Fallback"), None)
+                    if chosen not in box.iterancestors():
+                        continue
+                textbox_number += 1
+                for number, paragraph in enumerate(box.iter(qn("w:p")), start=1):
+                    text = _normalize_text(Paragraph(paragraph, document._body).text)
+                    if text:
+                        sections.append(ExtractedSection(
+                            ordinal=len(sections),
+                            locator_type=LocatorType.PARAGRAPH,
+                            locator_label=f"文本框 {textbox_number} · 段落 {number}",
+                            text=text,
+                        ))
     except MaterialParseError:
         raise
     except Exception as exc:

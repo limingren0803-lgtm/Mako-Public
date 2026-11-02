@@ -1,6 +1,7 @@
 (() => {
   const categoryLabels = {
     resume: "简历",
+    experience: "经历补充",
     project: "项目文档",
     course: "课程材料",
     note: "求职笔记",
@@ -16,7 +17,9 @@
     detailOffset: 0,
     previewFile: null,
     retryCreate: null,
-    deleting: null
+    deleting: null,
+    currentResumeId: null,
+    currentResumeRevision: 0
   };
 
   const fileInput = document.getElementById("knowledge-file");
@@ -109,35 +112,38 @@
     const baseName = payload.original_filename.replace(/\.[^.]+$/, "");
     document.getElementById("material-title").value = baseName.slice(0, 200);
     fileStatus.textContent = `${payload.original_filename} 已完成解析。请检查预览，再选择名称和分类。`;
-    preview.scrollIntoView({behavior: "smooth", block: "nearest"});
   };
 
   const previewFile = async file => {
-    if (!file) return;
+    if (!file || fileInput.disabled) return;
+    fileInput.disabled = true;
+    state.retryCreate = null;
     state.previewFile = file;
     preview.hidden = true;
     fileStatus.classList.remove("error");
-    fileStatus.textContent = "正在安全解析文件，预览不会保存材料…";
+    const stop = window.MakoView.wait(fileStatus, "文件已发送，等待解析预览；预览不会保存材料…");
     const body = new FormData();
     body.append("file", file);
     try {
       const payload = await window.MakoWorkspace.fetch("/materials/preview", {method: "POST", body});
       renderPreview(payload);
+      window.MakoView.feedback(fileStatus);
     } catch (error) {
       state.previewFile = null;
       fileInput.value = "";
       fileStatus.textContent = friendlyError(error);
       fileStatus.classList.add("error");
-    }
+    } finally { stop(); fileInput.disabled = false; }
   };
 
   const renderPicker = () => {
     const selectedIds = new Set([...pickerOptions.querySelectorAll("input:checked")].map(input => input.value));
-    const available = state.materials.filter(item => item.status === "active" && item.index_status === "ready");
+    const available = state.materials.filter(item => item.status === "active" && item.index_status === "ready" && item.category !== "resume");
     pickerOptions.replaceChildren();
     if (!available.length) {
-      pickerOptions.appendChild(text("p", "当前没有可检索的个人材料。请先在个人材料库保存材料，或选择其他模式。", "picker-empty"));
+      pickerOptions.appendChild(text("p", "当前没有可用的经历或项目补充材料。简历请在下方单独选择。", "picker-empty"));
       pickerStatus.textContent = "";
+      updateSummary();
       return;
     }
     available.forEach(material => {
@@ -152,6 +158,7 @@
       pickerOptions.appendChild(label);
     });
     pickerStatus.textContent = `可选择 ${available.length} 份材料，最多 20 份。`;
+    updateSummary();
   };
 
   const renderList = () => {
@@ -174,7 +181,7 @@
       button.dataset.materialId = material.material_id;
       const heading = document.createElement("div");
       heading.append(text("h3", material.title), text("span", indexLabels[material.index_status] || material.index_status, `index-state ${material.index_status}`));
-      button.append(heading, text("p", `${categoryLabels[material.category]} · ${fileTypeLabels[material.file_type]} · ${material.status === "active" ? "使用中" : "已停用"}`));
+      button.append(heading, text("p", `${categoryLabels[material.category]} · ${fileTypeLabels[material.file_type]} · ${material.status === "active" ? "使用中" : "已停用"}${material.material_id === state.currentResumeId ? " · 当前简历" : ""}`));
       list.appendChild(button);
     });
     renderPicker();
@@ -187,11 +194,14 @@
     try {
       const payload = await window.MakoWorkspace.fetch("/materials?limit=500");
       state.materials = payload.items;
+      state.currentResumeId = payload.current_resume_material_id || null;
+      state.currentResumeRevision = payload.current_resume_revision ?? 0;
       state.loaded = true;
       if (state.selectedId && !materialById(state.selectedId)) state.selectedId = null;
       renderList();
       if (state.selectedId) await loadDetail(state.selectedId, state.detailOffset);
       else detail.replaceChildren(emptyDetail());
+      document.dispatchEvent(new Event("mako:materials-updated"));
       if (!quiet) setMessage();
     } catch (error) {
       setMessage(`${friendlyError(error)} 你可以保留当前文件并稍后重试。`, "error");
@@ -217,6 +227,23 @@
     const states = document.createElement("div");
     states.className = "material-state-stack";
     states.append(text("span", material.status === "active" ? "使用中" : "已停用", `material-status ${material.status}`), text("span", indexLabels[material.index_status], `index-state ${material.index_status}`));
+    if (material.category === "resume") {
+      if (material.material_id === state.currentResumeId) states.append(text("span", "当前简历", "source-pill"));
+      else if (material.status === "active" && material.index_status === "ready") {
+        const choose = text("button", "设为当前简历", "secondary");
+        choose.type = "button";
+        choose.dataset.materialOperation = "current-resume";
+        choose.dataset.materialId = material.material_id;
+        states.appendChild(choose);
+      }
+    }
+    if (material.status === "active" && material.index_status === "ready") {
+      const startTask = text("button", "用这份材料开始任务", "secondary");
+      startTask.type = "button";
+      startTask.dataset.materialOperation = "start-task";
+      startTask.dataset.materialId = material.material_id;
+      states.appendChild(startTask);
+    }
     header.append(heading, states);
 
     const meta = document.createElement("div");
@@ -330,8 +357,11 @@
       return;
     }
     const save = document.getElementById("save-material");
+    if (save.disabled) return;
     save.disabled = true;
-    status.textContent = "正在保存并建立索引…";
+    fileInput.disabled = true;
+    document.getElementById("discard-material-preview").disabled = true;
+    const stop = window.MakoView.wait(status, "保存请求已发送，等待保存与索引结果…");
     status.className = "status-message busy";
     const signature = `${state.previewFile.name}|${state.previewFile.size}|${state.previewFile.lastModified}|${titleValue}|${document.getElementById("material-category").value}`;
     const idempotencyKey = state.retryCreate?.signature === signature ? state.retryCreate.key : `material_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -348,12 +378,16 @@
       await loadMaterials({quiet: true});
       state.selectedId = saved.material_id;
       await loadDetail(saved.material_id);
-      setMessage(payload.indexed ? "材料已保存，现在可以参与相关分析。" : "材料已保存，但索引尚未建立。可以在详情中重试。", payload.indexed ? "success" : "error");
+      const anotherCurrent = saved.category === "resume" && state.currentResumeId && state.currentResumeId !== saved.material_id;
+      setMessage(!payload.indexed ? "材料已保存，但索引尚未建立。可以在详情中重试。" : anotherCurrent ? "新简历已保存；原简历仍为当前简历。需要改用新版本时，请点“设为当前简历”。" : "材料已保存，现在可以参与相关分析。", payload.indexed ? "success" : "error");
     } catch (error) {
       status.textContent = `${friendlyError(error)} 文件和预览仍然保留，可以检查后重试。`;
       status.className = "status-message error";
       await loadMaterials({quiet: true});
     } finally {
+      stop();
+      fileInput.disabled = false;
+      document.getElementById("discard-material-preview").disabled = false;
       save.disabled = false;
     }
   };
@@ -383,6 +417,16 @@
     });
     await loadMaterials({quiet: true});
     setMessage(payload.indexed ? "材料索引已恢复。" : "索引仍未建立，材料原文已经保留，可以稍后重试或删除。", payload.indexed ? "success" : "error");
+  };
+
+  const setCurrentResume = async materialId => {
+    const material = materialById(materialId);
+    if (!material || material.category !== "resume" || material.status !== "active" || material.index_status !== "ready") throw new Error("这份简历当前不可选用，请检查分类、使用状态和索引。");
+    const previous = materialById(state.currentResumeId);
+    if (previous && !window.confirm(`将当前简历从“${previous.title}”改为“${material.title}”？旧简历仍会保留，已有任务不会自动切换。`)) return;
+    await window.MakoWorkspace.fetch("/materials/current-resume", {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({material_id: materialId, revision: state.currentResumeRevision})});
+    await loadMaterials({quiet: true});
+    setMessage(`当前简历已改为“${material.title}”。已有任务仍沿用各自选定的版本。`, "success");
   };
 
   const openDeleteDialog = async materialId => {
@@ -439,6 +483,7 @@
   };
 
   const renderSources = (sources, used, mode = selection().mode) => {
+    document.getElementById("analysis-basis-context").textContent = mode === "off" ? "本次未使用个人材料库。分析正文中的判断仍需对照你提供的事实核对。" : "这里列出服务返回的材料引用；选择材料不等于所有内容均已采用。服务暂未提供每份未采用材料的原因。";
     resultSources.replaceChildren();
     if (mode === "off") {
       resultSources.hidden = true;
@@ -465,6 +510,15 @@
     });
   };
 
+  const updateSummary = () => {
+    window.MakoToolPage?.summarize();
+    const target = document.getElementById("material-selection-summary");
+    const inTask = !document.getElementById("task-context-rail").hidden;
+    if (inTask) { target.textContent = "沿用当前任务的材料范围，岗位与材料见上方任务上下文。提交前请核对本次输入。"; return; }
+    const mode = document.querySelector('input[name="personal-knowledge-mode"]:checked')?.value || "auto";
+    const names = [...pickerOptions.querySelectorAll("input:checked")].map(input => materialById(input.value)?.title || "材料名称暂不可用");
+    target.textContent = mode === "selected" ? names.length ? `本次选择 ${names.length} 份：${names.join("、")}。引用结果将在分析依据中显示。` : "下一步：选择本次希望参考的材料。" : mode === "off" ? "本次只使用当前输入与任务上下文。" : "本次自动查找相关个人材料；提交后可在分析依据中核对采用内容。";
+  };
   const updateMode = () => {
     const mode = document.querySelector('input[name="personal-knowledge-mode"]:checked')?.value || "auto";
     picker.hidden = mode !== "selected";
@@ -477,14 +531,11 @@
     } else {
       knowledgeHint.textContent = "Mako 会自动查找相关内容；如果没有达到相关性要求，本次分析不会引用个人材料。";
     }
-    const confirmation = document.getElementById("confirm-input");
-    if (confirmation.checked) {
-      confirmation.checked = false;
-      confirmation.dispatchEvent(new Event("change"));
-    }
+    updateSummary();
   };
 
   fileInput.addEventListener("change", () => previewFile(fileInput.files[0]));
+  window.MakoView.upload(fileInput, previewFile, value => { fileStatus.textContent = value; fileStatus.classList.add("error"); });
   document.getElementById("discard-material-preview").addEventListener("click", resetPreview);
   document.getElementById("save-material").addEventListener("click", savePreview);
   document.getElementById("material-status-filter").addEventListener("change", renderList);
@@ -502,7 +553,9 @@
     try {
       if (target.dataset.materialOperation === "save") await patchMaterial(target.dataset.materialId);
       if (target.dataset.materialOperation === "reindex") await reindexMaterial(target.dataset.materialId);
+      if (target.dataset.materialOperation === "current-resume") await setCurrentResume(target.dataset.materialId);
       if (target.dataset.materialOperation === "delete") await openDeleteDialog(target.dataset.materialId);
+      if (target.dataset.materialOperation === "start-task") window.MakoTasks.openCreate({materialId: target.dataset.materialId});
     } catch (error) {
       setMessage(friendlyError(error), "error");
       await loadMaterials({quiet: true});
@@ -543,15 +596,16 @@
       event.target.checked = false;
       pickerStatus.textContent = "每次最多选择 20 份材料。";
     }
-    const confirmation = document.getElementById("confirm-input");
-    if (confirmation.checked) {
-      confirmation.checked = false;
-      confirmation.dispatchEvent(new Event("change"));
-    }
+    updateSummary();
   });
 
   window.MakoMaterials = Object.freeze({
-    load: () => loadMaterials(),
+    friendlyError,
+    preview: previewFile,
+    updateSummary,
+    load: options => loadMaterials(options),
+    availableResumes: () => state.materials.filter(item => item.category === "resume" && item.status === "active" && item.index_status === "ready"),
+    currentResume: () => state.materials.find(item => item.material_id === state.currentResumeId) || null,
     selection,
     search,
     renderSources,

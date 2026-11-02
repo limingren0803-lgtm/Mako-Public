@@ -6,12 +6,12 @@ import pathlib
 import statistics
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from anthropic import AsyncAnthropic
 
-from core.llm_utils import extract_text_content
+from core.llm_utils import extract_json_value, extract_text_content
 from core.model_usage import create_message
 
 from core.intent_recognizer import IntentCategory, IntentRecognizer
@@ -109,8 +109,7 @@ Agent 响应: {response}
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = extract_text_content(resp.content)
-            s, e = raw.find("{"), raw.rfind("}") + 1
-            data = json.loads(raw[s:e])
+            data = extract_json_value(raw, dict)
             return QualityScores(
                 relevance=float(data.get("relevance", 0.5)),
                 accuracy=float(data.get("accuracy", 0.5)),
@@ -118,11 +117,11 @@ Agent 响应: {response}
                 helpfulness=float(data.get("helpfulness", 0.5)),
             )
         except Exception as ex:
-            logger.warning(f"LLM Judge 失败: {ex}")
+            logger.warning("LLM Judge 失败: error_type=%s", type(ex).__name__)
             return QualityScores(
                 0.5, 0.5, 0.5, 0.5,
                 judge_failed=True,
-                error=str(ex),
+                error=type(ex).__name__,
             )
 
     @staticmethod
@@ -210,7 +209,7 @@ class EndToEndEvaluator:
         recognizer: IntentRecognizer,
         api_key:  str,
         base_url: Optional[str] = None,
-        model:    str = "claude-3-5-sonnet-20241022",
+        model:    str = "claude-sonnet-4-6",
         baseline_path: Optional[str] = None,
     ):
         kwargs: Dict[str, Any] = {"api_key": api_key}
@@ -287,7 +286,7 @@ class EndToEndEvaluator:
         recommendations = self._recommendations(avg_scores, intent_metrics)
 
         report = EvalReport(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             total=len(results),
             passed=passed_count,
             pass_rate=round(pass_rate, 4),
@@ -426,7 +425,7 @@ class EndToEndEvaluator:
             data = json.loads(self._baseline_path.read_text(encoding="utf-8"))
             return self._report_from_dict(data)
         except Exception as ex:
-            logger.warning(f"读取评测基线失败: {ex}")
+            logger.warning("读取评测基线失败: error_type=%s", type(ex).__name__)
             return None
 
     def _save_baseline(self, report: EvalReport) -> None:
@@ -440,7 +439,7 @@ class EndToEndEvaluator:
             )
             self._baseline = report
         except Exception as ex:
-            logger.warning(f"保存评测基线失败: {ex}")
+            logger.warning("保存评测基线失败: error_type=%s", type(ex).__name__)
 
     @staticmethod
     def _report_from_dict(data: Dict[str, Any]) -> EvalReport:

@@ -11,8 +11,8 @@ from mcp.knowledge_source_catalog import OFFICIAL_CAREER_SOURCES_CN
 class PublicJobIntelligenceTests(unittest.TestCase):
     def test_catalog_covers_domestic_and_multinational_examples(self):
         source_ids = {source["source_id"] for source in OFFICIAL_CAREER_SOURCES_CN}
-        self.assertEqual(23, len(OFFICIAL_CAREER_SOURCES_CN))
-        self.assertEqual(23, len(source_ids))
+        self.assertEqual(109, len(OFFICIAL_CAREER_SOURCES_CN))
+        self.assertEqual(109, len(source_ids))
         self.assertTrue({
             "src_cn_baidu",
             "src_cn_sap",

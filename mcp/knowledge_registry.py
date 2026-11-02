@@ -55,7 +55,9 @@ class KnowledgeRegistry:
                     automation_allowed INTEGER NOT NULL DEFAULT 0,
                     policy_url TEXT,
                     industry TEXT,
+                    company_type TEXT,
                     recruitment_channels TEXT NOT NULL DEFAULT '[]',
+                    recruitment_summary TEXT NOT NULL DEFAULT '{}',
                     support_level TEXT NOT NULL DEFAULT 'official_directory',
                     verified_at TEXT,
                     health_status TEXT NOT NULL DEFAULT 'unknown',
@@ -178,9 +180,15 @@ class KnowledgeRegistry:
                 connection.execute("ALTER TABLE sources ADD COLUMN job_source_url TEXT")
             if "industry" not in source_columns:
                 connection.execute("ALTER TABLE sources ADD COLUMN industry TEXT")
+            if "company_type" not in source_columns:
+                connection.execute("ALTER TABLE sources ADD COLUMN company_type TEXT")
             if "recruitment_channels" not in source_columns:
                 connection.execute(
                     "ALTER TABLE sources ADD COLUMN recruitment_channels TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "recruitment_summary" not in source_columns:
+                connection.execute(
+                    "ALTER TABLE sources ADD COLUMN recruitment_summary TEXT NOT NULL DEFAULT '{}'"
                 )
             if "support_level" not in source_columns:
                 connection.execute(
@@ -256,7 +264,9 @@ class KnowledgeRegistry:
         automation_allowed: bool = False,
         policy_url: Optional[str] = None,
         industry: Optional[str] = None,
+        company_type: Optional[str] = None,
         recruitment_channels: Optional[List[str]] = None,
+        recruitment_summary: Optional[Dict[str, Any]] = None,
         support_level: str = "official_directory",
         verified_at: Optional[str] = None,
         source_id: Optional[str] = None,
@@ -265,16 +275,17 @@ class KnowledgeRegistry:
         source_id = source_id or f"src_{uuid.uuid4().hex[:16]}"
         delegated = sorted(set(delegated_domains or []))
         channels = sorted(set(recruitment_channels or []))
+        summary = recruitment_summary or {}
         with self._lock, self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO sources (
                     source_id, company_name, official_domain, source_url, job_source_url,
                     delegated_domains, source_type, refresh_policy,
-                    automation_allowed, policy_url, industry, recruitment_channels,
+                    automation_allowed, policy_url, industry, company_type, recruitment_channels, recruitment_summary,
                     support_level, verified_at, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
                 """,
                 (
                     source_id,
@@ -288,7 +299,9 @@ class KnowledgeRegistry:
                     int(automation_allowed),
                     policy_url,
                     industry,
+                    company_type,
                     json.dumps(channels, ensure_ascii=False),
+                    json.dumps(summary, ensure_ascii=False),
                     support_level,
                     verified_at,
                     now,
@@ -309,12 +322,15 @@ class KnowledgeRegistry:
             job_source_url = kwargs.get("job_source_url")
             if job_source_url and not existing.get("job_source_url"):
                 updates["job_source_url"] = job_source_url
-            for key in ("industry", "support_level", "verified_at"):
+            for key in ("industry", "company_type", "support_level", "verified_at"):
                 if kwargs.get(key) and kwargs.get(key) != existing.get(key):
                     updates[key] = kwargs[key]
             channels = sorted(set(kwargs.get("recruitment_channels") or []))
             if channels and channels != existing.get("recruitment_channels"):
                 updates["recruitment_channels"] = json.dumps(channels, ensure_ascii=False)
+            summary = kwargs.get("recruitment_summary") or {}
+            if summary and summary != existing.get("recruitment_summary"):
+                updates["recruitment_summary"] = json.dumps(summary, ensure_ascii=False)
             if updates:
                 assignments = ", ".join(f"{key} = ?" for key in updates)
                 with self._lock, self._connection() as connection:
@@ -344,6 +360,7 @@ class KnowledgeRegistry:
         status: Optional[str] = None,
         *,
         industry: Optional[str] = None,
+        company_type: Optional[str] = None,
         support_level: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         query = "SELECT * FROM sources"
@@ -355,6 +372,9 @@ class KnowledgeRegistry:
         if industry:
             clauses.append("industry = ?")
             params.append(industry)
+        if company_type:
+            clauses.append("company_type = ?")
+            params.append(company_type)
         if support_level:
             clauses.append("support_level = ?")
             params.append(support_level)
@@ -1178,10 +1198,12 @@ class KnowledgeRegistry:
             clauses.append("j.status = ?")
             params.append(status)
         query = """
-            SELECT j.*, v.version_number, v.content_hash, v.payload,
+            SELECT j.*, s.industry, s.company_type,
+                   v.version_number, v.content_hash, v.payload,
                    v.source_url, v.fetched_at, v.published_at,
                    v.validation_status, v.review_status, v.review_notes, v.reviewed_at
             FROM job_postings j
+            JOIN sources s ON s.source_id = j.source_id
             LEFT JOIN job_versions v ON v.job_version_id = j.current_version_id
         """
         if clauses:
@@ -1659,6 +1681,9 @@ class KnowledgeRegistry:
         result["delegated_domains"] = json.loads(result.get("delegated_domains") or "[]")
         result["recruitment_channels"] = json.loads(
             result.get("recruitment_channels") or "[]"
+        )
+        result["recruitment_summary"] = json.loads(
+            result.get("recruitment_summary") or "{}"
         )
         result["automation_allowed"] = bool(result.get("automation_allowed"))
         return result

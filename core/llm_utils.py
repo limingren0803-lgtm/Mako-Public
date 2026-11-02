@@ -1,4 +1,5 @@
 """LLM response helpers shared by Anthropic-compatible providers."""
+import json
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -36,6 +37,22 @@ def extract_text_content(content: Iterable[Any]) -> str:
             texts.append(text)
 
     return "\n".join(t for t in texts if t)
+
+
+def extract_json_value(text: str, expected_type: Optional[type] = None) -> Any:
+    """Extract the first valid JSON value from provider-added prose or fences."""
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(text):
+        if character not in "[{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if expected_type is None or isinstance(value, expected_type):
+            return value
+    expected = expected_type.__name__ if expected_type else "value"
+    raise ValueError(f"response does not contain a valid JSON {expected}")
 
 
 def inspect_text_completion(text: str, stop_reason: Optional[str]) -> TextCompletion:

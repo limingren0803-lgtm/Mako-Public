@@ -45,8 +45,8 @@ class PublicCareerWorkspaceTests(unittest.TestCase):
         script = (ui_root / "workspace.js").read_text(encoding="utf-8")
 
         self.assertIn('id="career-workspace-view"', html)
-        self.assertIn('src="workspace.js?v=2"', html)
-        self.assertIn('href="workspace.css?v=2"', html)
+        self.assertIn('src="workspace.js?v=16"', html)
+        self.assertIn('href="workspace.css?v=21"', html)
         self.assertIn('const WORKSPACE_API = "/v2/workspace"', script)
         self.assertIn("`${WORKSPACE_API}/session`", script)
         self.assertNotIn("X-Admin-Key", script)

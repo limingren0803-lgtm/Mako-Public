@@ -16,11 +16,12 @@ from core.personal_knowledge import (
     MaterialStatus,
     PersonalMaterial,
     material_payload,
+    utc_now,
     validate_identifier,
 )
 
 
-PERSONAL_KNOWLEDGE_SCHEMA_VERSION = 1
+PERSONAL_KNOWLEDGE_SCHEMA_VERSION = 3
 
 
 class PersonalKnowledgeConflictError(ValueError):
@@ -76,10 +77,15 @@ class PersonalKnowledgeRegistry:
             row = connection.execute(
                 "SELECT schema_version FROM personal_knowledge_schema WHERE singleton = 1"
             ).fetchone()
-            if row and int(row["schema_version"]) != PERSONAL_KNOWLEDGE_SCHEMA_VERSION:
+            if row and int(row["schema_version"]) not in (1, 2, PERSONAL_KNOWLEDGE_SCHEMA_VERSION):
                 raise PersonalKnowledgeSchemaError(
                     "personal knowledge database requires an explicit migration"
                 )
+            if row and int(row["schema_version"]) == 1:
+                self._migrate_v1_to_v2(connection)
+                row = {"schema_version": 2}
+            if row and int(row["schema_version"]) == 2:
+                self._migrate_v2_to_v3(connection)
             if not row:
                 connection.execute(
                     "INSERT INTO personal_knowledge_schema VALUES (1, ?)",
@@ -92,7 +98,7 @@ class PersonalKnowledgeRegistry:
                     title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
                     original_filename TEXT NOT NULL CHECK(length(original_filename) BETWEEN 1 AND 255),
                     file_type TEXT NOT NULL CHECK(file_type IN ('txt','md','pdf','docx')),
-                    category TEXT NOT NULL CHECK(category IN ('resume','project','course','note','other')),
+                    category TEXT NOT NULL CHECK(category IN ('resume','experience','project','course','note','other')),
                     status TEXT NOT NULL CHECK(status IN ('active','inactive')),
                     index_status TEXT NOT NULL CHECK(index_status IN ('pending','ready','failed')),
                     content_sha256 TEXT NOT NULL UNIQUE CHECK(length(content_sha256) = 64),
@@ -129,8 +135,120 @@ class PersonalKnowledgeRegistry:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(operation, idempotency_key)
                 );
+
+                CREATE TABLE IF NOT EXISTS personal_knowledge_preferences (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    current_resume_material_id TEXT,
+                    updated_at TEXT NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision >= 1),
+                    FOREIGN KEY(current_resume_material_id)
+                        REFERENCES personal_materials(material_id) ON DELETE SET NULL
+                );
                 """
             )
+            connection.execute(
+                """INSERT OR IGNORE INTO personal_knowledge_preferences(
+                       singleton,current_resume_material_id,updated_at,revision
+                   ) VALUES (1,NULL,?,1)""",
+                (utc_now().isoformat(),),
+            )
+
+    @staticmethod
+    def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            source_count = int(connection.execute(
+                "SELECT COUNT(*) FROM personal_materials"
+            ).fetchone()[0])
+            connection.execute(
+                """
+                CREATE TABLE personal_materials_v2 (
+                    material_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
+                    original_filename TEXT NOT NULL CHECK(length(original_filename) BETWEEN 1 AND 255),
+                    file_type TEXT NOT NULL CHECK(file_type IN ('txt','md','pdf','docx')),
+                    category TEXT NOT NULL CHECK(category IN ('resume','experience','project','course','note','other')),
+                    status TEXT NOT NULL CHECK(status IN ('active','inactive')),
+                    index_status TEXT NOT NULL CHECK(index_status IN ('pending','ready','failed')),
+                    content_sha256 TEXT NOT NULL UNIQUE CHECK(length(content_sha256) = 64),
+                    text_sha256 TEXT NOT NULL CHECK(length(text_sha256) = 64),
+                    byte_size INTEGER NOT NULL CHECK(byte_size BETWEEN 1 AND 10485760),
+                    character_count INTEGER NOT NULL CHECK(character_count BETWEEN 1 AND 1000000),
+                    section_count INTEGER NOT NULL CHECK(section_count BETWEEN 1 AND 100000),
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision >= 1)
+                )
+                """
+            )
+            columns = (
+                "material_id,title,original_filename,file_type,category,status,index_status,"
+                "content_sha256,text_sha256,byte_size,character_count,section_count,payload,"
+                "created_at,updated_at,revision"
+            )
+            connection.execute(
+                f"INSERT INTO personal_materials_v2({columns}) SELECT {columns} FROM personal_materials"
+            )
+            copied_count = int(connection.execute(
+                "SELECT COUNT(*) FROM personal_materials_v2"
+            ).fetchone()[0])
+            if copied_count != source_count:
+                raise PersonalKnowledgeSchemaError("personal material migration count mismatch")
+            connection.execute("DROP TABLE personal_materials")
+            connection.execute("ALTER TABLE personal_materials_v2 RENAME TO personal_materials")
+            connection.execute(
+                """CREATE INDEX idx_personal_materials_state
+                   ON personal_materials(status, index_status, updated_at DESC, material_id)"""
+            )
+            connection.execute(
+                "UPDATE personal_knowledge_schema SET schema_version = 2 WHERE singleton = 1"
+            )
+            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise PersonalKnowledgeSchemaError("personal knowledge migration integrity check failed")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise PersonalKnowledgeSchemaError("personal knowledge migration foreign key check failed")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
+
+    @staticmethod
+    def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS personal_knowledge_preferences (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                current_resume_material_id TEXT,
+                updated_at TEXT NOT NULL,
+                revision INTEGER NOT NULL CHECK(revision >= 1),
+                FOREIGN KEY(current_resume_material_id)
+                    REFERENCES personal_materials(material_id) ON DELETE SET NULL
+            )"""
+        )
+        connection.execute(
+            """INSERT OR IGNORE INTO personal_knowledge_preferences(
+                   singleton,current_resume_material_id,updated_at,revision
+               ) VALUES (1,NULL,?,1)""",
+            (utc_now().isoformat(),),
+        )
+        resume_rows = connection.execute(
+            """SELECT material_id FROM personal_materials
+               WHERE category='resume' AND status='active' AND index_status='ready'
+               ORDER BY updated_at DESC, material_id LIMIT 2"""
+        ).fetchall()
+        if len(resume_rows) == 1:
+            connection.execute(
+                """UPDATE personal_knowledge_preferences
+                   SET current_resume_material_id=? WHERE singleton=1""",
+                (resume_rows[0]["material_id"],),
+            )
+        connection.execute(
+            "UPDATE personal_knowledge_schema SET schema_version = 3 WHERE singleton = 1"
+        )
 
     @staticmethod
     def _material(row: sqlite3.Row) -> PersonalMaterial:
@@ -294,7 +412,83 @@ class PersonalKnowledgeRegistry:
                 if not exists:
                     raise PersonalKnowledgeNotFoundError(material.material_id)
                 raise PersonalKnowledgeConflictError("material was updated by another request")
+            if (
+                material.category != MaterialCategory.RESUME
+                or material.status != MaterialStatus.ACTIVE
+                or material.index_status != MaterialIndexStatus.READY
+            ):
+                connection.execute(
+                    """UPDATE personal_knowledge_preferences
+                       SET current_resume_material_id=NULL, updated_at=?, revision=revision+1
+                       WHERE singleton=1 AND current_resume_material_id=?""",
+                    (utc_now().isoformat(), material.material_id),
+                )
         return material
+
+    def get_current_resume_preference(self) -> dict[str, Any]:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT current_resume_material_id,updated_at,revision
+                   FROM personal_knowledge_preferences WHERE singleton=1"""
+            ).fetchone()
+        return {
+            "material_id": row["current_resume_material_id"],
+            "updated_at": row["updated_at"],
+            "revision": int(row["revision"]),
+        }
+
+    def set_current_resume(
+        self, material_id: Optional[str], *, expected_revision: int,
+    ) -> dict[str, Any]:
+        if material_id is not None:
+            validate_identifier(material_id, "material_id")
+        now = utc_now().isoformat()
+        with self._lock, self._connection() as connection:
+            if material_id is not None:
+                row = connection.execute(
+                    "SELECT payload FROM personal_materials WHERE material_id=?",
+                    (material_id,),
+                ).fetchone()
+                material = self._material(row) if row else None
+                if (
+                    material is None
+                    or material.category != MaterialCategory.RESUME
+                    or material.status != MaterialStatus.ACTIVE
+                    or material.index_status != MaterialIndexStatus.READY
+                ):
+                    raise ValueError("current resume must be an active, ready resume material")
+            cursor = connection.execute(
+                """UPDATE personal_knowledge_preferences
+                   SET current_resume_material_id=?,updated_at=?,revision=revision+1
+                   WHERE singleton=1 AND revision=?""",
+                (material_id, now, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise PersonalKnowledgeConflictError("current resume was updated by another request")
+        return self.get_current_resume_preference()
+
+    def ensure_current_resume(self, material_id: str) -> dict[str, Any]:
+        validate_identifier(material_id, "material_id")
+        now = utc_now().isoformat()
+        with self._lock, self._connection() as connection:
+            material = connection.execute(
+                """SELECT 1 FROM personal_materials
+                   WHERE material_id=? AND category='resume' AND status='active'
+                   AND index_status='ready'""",
+                (material_id,),
+            ).fetchone()
+            count = connection.execute(
+                """SELECT COUNT(*) FROM personal_materials
+                   WHERE category='resume' AND status='active' AND index_status='ready'"""
+            ).fetchone()[0]
+            if material and int(count) == 1:
+                connection.execute(
+                    """UPDATE personal_knowledge_preferences
+                       SET current_resume_material_id=?,updated_at=?,revision=revision+1
+                       WHERE singleton=1 AND current_resume_material_id IS NULL""",
+                    (material_id, now),
+                )
+        return self.get_current_resume_preference()
 
     def deletion_impact(self, material_id: str, *, vector_count: int) -> dict[str, int]:
         material = self.get_material(material_id)
@@ -312,6 +506,12 @@ class PersonalKnowledgeRegistry:
                 raise PersonalKnowledgeNotFoundError(material_id)
             if int(row["revision"]) != expected_revision:
                 raise PersonalKnowledgeConflictError("material was updated by another request")
+            connection.execute(
+                """UPDATE personal_knowledge_preferences
+                   SET current_resume_material_id=NULL,updated_at=?,revision=revision+1
+                   WHERE singleton=1 AND current_resume_material_id=?""",
+                (utc_now().isoformat(), material_id),
+            )
             connection.execute("DELETE FROM personal_materials WHERE material_id=?", (material_id,))
             connection.execute(
                 "DELETE FROM personal_idempotency_keys WHERE resource_id=?", (material_id,)
@@ -326,7 +526,11 @@ class PersonalKnowledgeRegistry:
                 "material": material.model_dump(mode="json"),
                 "sections": [item.model_dump(mode="json") for item in self.list_sections(material.material_id, limit=None)],
             })
-        return {"schema_version": PERSONAL_KNOWLEDGE_SCHEMA_VERSION, "materials": items}
+        return {
+            "schema_version": PERSONAL_KNOWLEDGE_SCHEMA_VERSION,
+            "current_resume": self.get_current_resume_preference(),
+            "materials": items,
+        }
 
     def integrity_report(self) -> dict[str, Any]:
         with self._connection() as connection:

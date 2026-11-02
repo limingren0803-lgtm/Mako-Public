@@ -16,9 +16,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-import chromadb
-
 from mcp.knowledge_registry import KnowledgeRegistry
+from core.chroma_client import connect_chroma
 from mcp.knowledge_source_catalog import OFFICIAL_CAREER_SOURCES_CN
 
 logger = logging.getLogger(__name__)
@@ -41,25 +40,14 @@ class KnowledgeBase:
         chroma_port: int = 8000,
         chroma_path: str = "./data/chroma",
         registry_path: Optional[str] = None,
+        allow_local_chroma_fallback: bool = True,
     ):
-        # 优先连接独立 ChromaDB 服务（服务端内置 embedding 模型，客户端无需下载）
-        self._use_server = False
-        try:
-            # HttpClient 默认也会初始化 ChromaDB telemetry；显式关闭避免 posthog 兼容性错误日志。
-            self._client = chromadb.HttpClient(
-                host=chroma_host,
-                port=chroma_port,
-                settings=chromadb.Settings(anonymized_telemetry=False),
-            )
-            self._client.heartbeat()
-            self._use_server = True
-            logger.info(f"知识库 ChromaDB 已连接: {chroma_host}:{chroma_port}")
-        except Exception:
-            logger.info(f"知识库 ChromaDB 服务不可用，使用本地模式: {chroma_path}")
-            self._client = chromadb.PersistentClient(
-                path=chroma_path,
-                settings=chromadb.Settings(anonymized_telemetry=False),
-            )
+        self._client, self._use_server = connect_chroma(
+            host=chroma_host,
+            port=chroma_port,
+            local_path=chroma_path,
+            allow_local_fallback=allow_local_chroma_fallback,
+        )
 
         # 使用服务端时不传 embedding_function，让服务端处理
         # 本地模式时也不传，使用 ChromaDB 默认的（会触发模型下载）
@@ -316,6 +304,9 @@ class KnowledgeBase:
             validate_source_url(kwargs["job_source_url"], allowed_domains)
         if kwargs.get("policy_url"):
             validate_source_url(kwargs["policy_url"], allowed_domains)
+        summary_url = (kwargs.get("recruitment_summary") or {}).get("source_url")
+        if summary_url:
+            validate_source_url(summary_url, allowed_domains)
         return self._registry.register_source(**kwargs)
 
     def list_sources(
@@ -323,11 +314,13 @@ class KnowledgeBase:
         status: Optional[str] = None,
         *,
         industry: Optional[str] = None,
+        company_type: Optional[str] = None,
         support_level: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         return self._registry.list_sources(
             status=status,
             industry=industry,
+            company_type=company_type,
             support_level=support_level,
         )
 

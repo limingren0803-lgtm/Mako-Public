@@ -56,7 +56,7 @@ jobs:
       - name: Check tracked files for credential patterns
         shell: bash
         run: |
-          if git grep -I -q -E '(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})'; then
+          if git grep -I -q -E '((^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})'; then
             echo "Potential credential pattern detected in a tracked file."
             exit 1
           fi

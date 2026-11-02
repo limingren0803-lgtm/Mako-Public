@@ -17,9 +17,9 @@ import statistics
 import time
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Coroutine, Deque, Dict, List, Optional
 
 import httpx
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
@@ -43,7 +43,7 @@ class Alert:
     message:     str
     value:       float
     threshold:   float
-    ts:          str = field(default_factory=lambda: datetime.now().isoformat())
+    ts:          str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     resolved:    bool = False
 
 
@@ -136,11 +136,34 @@ class PerformanceMonitor:
         self._suggestions: List[Suggestion] = []
         self._active       = False
         self._task:        Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
         # Prometheus 指标（可选）
         self._prom: Dict[str, Any] = {}
         if prometheus_port:
             self._setup_prometheus(prometheus_port)
+
+    def _track_background_task(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        label: str,
+    ) -> None:
+        task = asyncio.create_task(coro, name=label)
+        self._background_tasks.add(task)
+
+        def _completed(completed: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(completed)
+            if completed.cancelled():
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "Monitor 后台任务失败: task=%s error_type=%s",
+                    label,
+                    type(error).__name__,
+                )
+
+        task.add_done_callback(_completed)
 
     def _setup_prometheus(self, port: int) -> None:
         self._prom = {
@@ -169,6 +192,17 @@ class PerformanceMonitor:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            self._task = None
+
+        tasks = tuple(self._background_tasks)
+        if not tasks:
+            return
+        _, pending = await asyncio.wait(tasks, timeout=5.0)
+        if pending:
+            logger.warning("关闭时取消未完成 Webhook: count=%s", len(pending))
+            for task in pending:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── 采集循环 ──────────────────────────────────────────────────────────────
 
@@ -177,7 +211,10 @@ class PerformanceMonitor:
             try:
                 await self._collect()
             except Exception as ex:
-                logger.error(f"Monitor 采集异常: {ex}")
+                logger.error(
+                    "Monitor 采集异常: error_type=%s",
+                    type(ex).__name__,
+                )
             await asyncio.sleep(self._interval)
 
     async def _collect(self) -> None:
@@ -268,7 +305,10 @@ class PerformanceMonitor:
             logger.warning(f"[{severity.value.upper()}] {alert.message}")
             # 异步发送 Webhook（不阻塞采集循环）
             if self._webhook:
-                asyncio.create_task(self._send_webhook(alert))
+                self._track_background_task(
+                    self._send_webhook(alert),
+                    "monitor-webhook",
+                )
 
     def _generate_routing_suggestions(self, agent_stats: Dict[str, Any]) -> None:
         """
@@ -300,7 +340,10 @@ class PerformanceMonitor:
             async with httpx.AsyncClient(timeout=5.0) as c:
                 await c.post(self._webhook, json=asdict(alert))  # type: ignore
         except Exception as ex:
-            logger.error(f"Webhook 发送失败: {ex}")
+            logger.error(
+                "Webhook 发送失败: error_type=%s",
+                type(ex).__name__,
+            )
 
     # ── 查询接口 ──────────────────────────────────────────────────────────────
 

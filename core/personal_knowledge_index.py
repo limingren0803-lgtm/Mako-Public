@@ -107,15 +107,32 @@ class PersonalKnowledgeIndex:
         }
         if not allowed:
             return []
+        allowed_ids = [item for item in (material_ids or sorted(allowed)) if item in allowed]
+        if material_ids and len(allowed_ids) > 1:
+            per_material = [
+                self._query_hits(clean, allowed, [material_id], top_k, max_distance)
+                for material_id in allowed_ids
+            ]
+            primary = [hits[0] for hits in per_material if hits]
+            extras = sorted(
+                (hit for hits in per_material for hit in hits[1:]),
+                key=lambda hit: (hit.distance, hit.material_id, hit.section_id),
+            )
+            return primary + extras[:max(0, top_k - len(primary))]
+        return self._query_hits(clean, allowed, allowed_ids, top_k, max_distance)[:top_k]
+
+    def _query_hits(
+        self, query: str, allowed: dict[str, PersonalMaterial], allowed_ids: list[str],
+        top_k: int, max_distance: float,
+    ) -> list[MaterialSearchHit]:
         requested = min(max(top_k * 4, top_k), 40)
-        allowed_ids = sorted(allowed)
         where = (
             {"material_id": allowed_ids[0]}
             if len(allowed_ids) == 1
             else {"material_id": {"$in": allowed_ids}}
         )
         result = self._collection.query(
-            query_texts=[clean],
+            query_texts=[query],
             n_results=requested,
             where=where,
             include=["documents", "metadatas", "distances"],
@@ -140,6 +157,4 @@ class PersonalKnowledgeIndex:
                 excerpt=str(document)[:500],
                 distance=float(distance),
             ))
-            if len(hits) >= top_k:
-                break
         return hits

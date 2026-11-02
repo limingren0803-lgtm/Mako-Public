@@ -22,6 +22,7 @@ class MaterialFileType(str, Enum):
 
 class MaterialCategory(str, Enum):
     RESUME = "resume"
+    EXPERIENCE = "experience"
     PROJECT = "project"
     COURSE = "course"
     NOTE = "note"

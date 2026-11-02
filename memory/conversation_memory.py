@@ -9,22 +9,22 @@
 关键设计：
   - 上下文构建时三级记忆融合，按重要性 + 时效性排序
   - 工作记忆超过阈值时自动压缩（LLM 摘要），防止 context 爆炸
-  - 所有 Embedding 通过 Anthropic API 生成，无本地模型
+  - 向量由 ChromaDB 配置的 embedding 能力生成
 """
 import hashlib
 import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-import chromadb
 import redis
 from anthropic import AsyncAnthropic
 
 from core.llm_utils import extract_text_content
+from core.chroma_client import connect_chroma
 from core.career_profile import CareerProfile
 from core.model_usage import create_message
 
@@ -46,7 +46,7 @@ class MsgRole(Enum):
 class Message:
     role:       MsgRole
     content:    str
-    timestamp:  datetime = field(default_factory=datetime.now)
+    timestamp:  datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata:   Dict[str, Any] = field(default_factory=dict)
 
 
@@ -98,7 +98,8 @@ class MemoryManager:
         chroma_path:  str = "./data/chroma",
         api_key:      str = "",
         base_url:     Optional[str] = None,
-        model:        str = "claude-3-5-sonnet-20241022",
+        model:        str = "claude-sonnet-4-6",
+        allow_local_chroma_fallback: bool = True,
     ):
         kwargs: Dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -108,22 +109,12 @@ class MemoryManager:
 
         self._redis = redis.from_url(redis_url, decode_responses=True)
 
-        # ChromaDB：优先连接独立服务（docker compose 模式），连不上则降级为本地嵌入式
-        try:
-            # HttpClient 默认也会初始化 ChromaDB telemetry；显式关闭避免 posthog 兼容性错误日志。
-            chroma = chromadb.HttpClient(
-                host=chroma_host,
-                port=chroma_port,
-                settings=chromadb.Settings(anonymized_telemetry=False),
-            )
-            chroma.heartbeat()  # 测试连接
-            logger.info(f"ChromaDB 已连接: {chroma_host}:{chroma_port}")
-        except Exception:
-            logger.info(f"ChromaDB 服务不可用，使用本地嵌入式模式: {chroma_path}")
-            chroma = chromadb.PersistentClient(
-                path=chroma_path,
-                settings=chromadb.Settings(anonymized_telemetry=False),
-            )
+        chroma, _ = connect_chroma(
+            host=chroma_host,
+            port=chroma_port,
+            local_path=chroma_path,
+            allow_local_fallback=allow_local_chroma_fallback,
+        )
 
         # 情景记忆：存储历史对话片段
         self._episodic = chroma.get_or_create_collection("episodic")
@@ -277,7 +268,7 @@ class MemoryManager:
                 ids=[doc_id],
                 documents=[doc_text],
                 metadatas=[{"user_id": user_id, "conv_id": conv_id,
-                            "ts": datetime.now().isoformat()}],
+                            "ts": datetime.now(timezone.utc).isoformat()}],
             )
             logger.info(
                 "PROFILE_UPDATE_OK user_id=%s",
@@ -424,7 +415,7 @@ class MemoryManager:
                 ids=[doc_id],
                 documents=[summary],
                 metadatas=[{"user_id": user_id, "conv_id": conv_id,
-                            "ts": datetime.now().isoformat(), "full_text": self._safe_text(text[:500])}],
+                            "ts": datetime.now(timezone.utc).isoformat(), "full_text": self._safe_text(text[:500])}],
             )
         except Exception as ex:
             logger.warning("存储情景记忆失败: error_type=%s", type(ex).__name__)

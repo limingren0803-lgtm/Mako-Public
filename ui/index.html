@@ -6,29 +6,43 @@
   <meta name="description" content="Mako 求职工作台">
   <title>Mako — AI Career Intelligence System</title>
   <link rel="icon" type="image/png" href="assets/mako-favicon.png">
-  <link rel="stylesheet" href="styles.css?v=4">
-  <link rel="stylesheet" href="workspace.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="workspace.css?v=21">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header class="topbar">
     <a class="brand" href="/mako/" aria-label="Mako 首页">
       <span class="brand-mark"><img src="assets/mako-icon.png" alt=""></span>
       <span><strong>Mako</strong><small>AI Career Intelligence System</small></span>
     </a>
+    <div class="topbar-tools">
+      <span id="workspace-session-state" class="session-state">正在连接本地工作区</span>
+      <details id="workspace-data-menu" class="workspace-data-menu">
+        <summary>工作区数据</summary>
+        <div class="data-menu-content">
+          <button class="secondary" id="export-workspace" type="button">导出数据</button>
+          <button class="secondary" id="open-continuity" type="button">草稿与续接设置</button>
+          <button class="text-button danger-text" id="clear-workspace" type="button">清空数据</button>
+        </div>
+      </details>
+    </div>
   </header>
 
   <div class="workspace">
     <aside class="sidebar" aria-label="功能导航">
-      <p class="eyebrow">求职进度</p>
-      <nav id="workspace-nav" aria-label="求职进度">
-        <button class="nav-item active" data-workspace-view="overview"><span>00</span><b>求职总览</b><small>今天先做什么</small></button>
+      <p class="eyebrow">求职工作区</p>
+      <nav id="workspace-nav" aria-label="求职工作区">
+        <button class="nav-item active" data-workspace-view="overview"><span>⌂</span><b>我的工作台</b><small>今天先做什么</small></button>
+        <button class="nav-item" data-workspace-view="tasks"><span>◎</span><b>求职任务</b><small>沿着同一目标继续</small></button>
         <button class="nav-item" data-workspace-view="tracks"><span>↗</span><b>目标岗位</b><small>跟进岗位与依据</small></button>
-        <button class="nav-item" data-workspace-view="actions"><span>✓</span><b>今日行动</b><small>确认并完成任务</small></button>
+        <button class="nav-item" data-workspace-view="actions"><span>✓</span><b>行动日程</b><small>确认并完成任务</small></button>
         <button class="nav-item" data-workspace-view="materials"><span>▤</span><b>个人材料库</b><small>保存并引用个人材料</small></button>
       </nav>
-      <div class="sidebar-divider"></div>
-      <p class="eyebrow">求职流程</p>
-      <nav id="skill-nav">
+      <section class="analysis-tools" id="analysis-tools" aria-labelledby="career-tools-title">
+        <h2 id="career-tools-title">独立分析工具</h2>
+        <p class="tools-description">单独使用，按需选择</p>
+      <nav id="skill-nav" aria-label="六项求职分析">
         <button class="nav-item active" data-skill="career_profile"><span>01</span><b>背景诊断</b><small>整理经历与能力边界</small></button>
         <button class="nav-item" data-skill="career_match"><span>02</span><b>方向匹配</b><small>判断岗位方向与差距</small></button>
         <button class="nav-item" data-skill="career_jd"><span>03</span><b>JD 分析</b><small>拆解要求与证据需求</small></button>
@@ -36,26 +50,36 @@
         <button class="nav-item" data-skill="career_interview"><span>05</span><b>面试准备</b><small>围绕目标岗位准备回答</small></button>
         <button class="nav-item" data-skill="career_planning"><span>06</span><b>行动规划</b><small>生成可执行求职计划</small></button>
       </nav>
+      </section>
     </aside>
 
-    <main class="main">
+    <main class="main" id="main-content" tabindex="-1">
+      <p id="continuity-notice" class="workspace-message error" role="status" hidden></p>
+      <section id="resume-banner" class="resume-banner" hidden aria-label="恢复上次准备">
+        <div><b>接着上次的准备继续</b><p id="resume-description"></p><p id="resume-error" class="hint" role="status"></p></div>
+        <div class="resume-controls"><button id="resume-last" class="primary" type="button">恢复上次内容</button><button id="discard-retained" class="text-button" type="button">丢弃保留内容</button></div>
+      </section>
       <section id="career-workspace-view" aria-label="求职进度工作区">
         <header class="workspace-hero">
           <div>
-            <p class="eyebrow">CAREER WORKSPACE</p>
-            <h1 id="workspace-view-title">今天先完成真正影响进度的事</h1>
-            <p id="workspace-view-description">目标岗位、判断依据和下一步行动集中在这里，六项分析结果不再停留在一次对话里。</p>
+            <p class="eyebrow workspace-kicker">我的求职工作区</p>
+            <h1 id="workspace-view-title">准备好，向下一站前进。</h1>
+            <p id="workspace-view-description" hidden></p>
           </div>
-          <div class="workspace-hero-actions">
-            <span id="workspace-session-state" class="session-state">正在连接本地工作区</span>
-            <button class="secondary" id="export-workspace" type="button">导出数据</button>
-            <button class="text-button danger-text" id="clear-workspace" type="button">清空数据</button>
-          </div>
+
         </header>
 
         <div id="workspace-message" class="workspace-message" role="status" aria-live="polite"></div>
 
         <section class="workspace-page" data-page="overview">
+          <div class="dashboard-top">
+            <section class="dashboard-focus" id="dashboard-focus" aria-label="继续求职准备" aria-busy="true"><p>正在读取求职任务…</p></section>
+            <section class="dashboard-schedule" aria-labelledby="dashboard-schedule-title">
+              <div class="workspace-card-heading"><div><p class="eyebrow">留意时间窗口</p><h2 id="dashboard-schedule-title">未来七天</h2></div><button type="button" class="text-button" data-show-page="actions">完整日历 ↗</button></div>
+              <div id="dashboard-week" class="dashboard-week"></div>
+              <div id="dashboard-upcoming" class="dashboard-upcoming"></div>
+            </section>
+          </div>
           <div class="summary-strip" aria-label="求职进度摘要">
             <article><span>今天优先做</span><strong id="summary-priority-count">—</strong><small>最多显示 5 项</small></article>
             <article><span>临近截止</span><strong id="summary-due-count">—</strong><small>未来 7 天</small></article>
@@ -66,7 +90,7 @@
           <div class="overview-grid">
             <section class="workspace-card today-card">
               <div class="workspace-card-heading">
-                <div><p class="eyebrow">TODAY</p><h2>今天优先做</h2></div>
+                <div><h2>今天优先做</h2></div>
                 <button class="text-button" data-open-action type="button">添加行动</button>
               </div>
               <div id="overview-priority-list" class="workspace-list"></div>
@@ -74,7 +98,7 @@
 
             <section class="workspace-card stage-card">
               <div class="workspace-card-heading">
-                <div><p class="eyebrow">PROGRESS</p><h2>岗位进度</h2></div>
+                <div><h2>岗位进度</h2></div>
                 <button class="text-button" data-open-track type="button">添加岗位</button>
               </div>
               <div id="stage-overview" class="stage-overview"></div>
@@ -83,7 +107,7 @@
 
             <section class="workspace-card history-card">
               <div class="workspace-card-heading">
-                <div><p class="eyebrow">HISTORY</p><h2>最近完成</h2></div>
+                <div><h2>最近完成</h2></div>
                 <span class="trace-note">完成后仍可重新打开</span>
               </div>
               <div id="overview-history-list" class="workspace-list"></div>
@@ -93,11 +117,6 @@
 
         <section class="workspace-page" data-page="tracks" hidden>
           <div class="page-toolbar">
-            <div>
-              <p class="eyebrow">TARGET JOBS</p>
-              <h2>目标岗位</h2>
-              <p>从关注到面试，每个阶段都保留来源、要求和关联行动。</p>
-            </div>
             <button class="primary" data-open-track type="button">添加目标岗位</button>
           </div>
           <div class="track-workbench">
@@ -127,16 +146,18 @@
 
         <section class="workspace-page" data-page="actions" hidden>
           <div class="page-toolbar">
-            <div>
-              <p class="eyebrow">NEXT ACTIONS</p>
-              <h2>今日行动</h2>
-              <p>每件事都有完成标准，由你决定何时开始、完成或重新打开。</p>
-            </div>
             <button class="primary" data-open-action type="button">添加行动</button>
           </div>
-          <section class="workspace-card">
+          <section class="workspace-card action-planner">
+            <div class="planner-heading">
+              <div><h2>把下一步放进日程</h2><p class="hint">按截止日期查看行动与报名节点，时间以本机时区显示。</p></div>
+              <div class="planner-views" role="group" aria-label="行动显示方式">
+                <button type="button" class="secondary" data-action-view="calendar" aria-pressed="true">日历</button>
+                <button type="button" class="secondary" data-action-view="list" aria-pressed="false">列表</button>
+              </div>
+            </div>
             <div class="action-filters">
-              <label for="action-status-filter">状态</label>
+              <label for="action-status-filter">行动状态</label>
               <select id="action-status-filter">
                 <option value="">全部状态</option>
                 <option value="suggested">待确认</option>
@@ -147,17 +168,59 @@
               <label for="action-track-filter">目标岗位</label>
               <select id="action-track-filter"><option value="">全部岗位</option></select>
             </div>
-            <div id="action-list" class="workspace-list action-list"></div>
+            <div id="action-calendar">
+              <div class="calendar-toolbar">
+                <h3 id="calendar-month" aria-live="polite"></h3>
+                <div role="group" aria-label="切换月份">
+                  <button type="button" class="secondary" data-calendar-month="-1" aria-label="上个月">‹</button>
+                  <button type="button" class="secondary" id="calendar-today">今天</button>
+                  <button type="button" class="secondary" data-calendar-month="1" aria-label="下个月">›</button>
+                </div>
+              </div>
+              <div class="calendar-legend"><span>● 行动截止</span><span class="deadline-legend">● 报名截止</span><span>待确认建议显示为虚线；已取消行动不进入日历。</span></div>
+              <div class="calendar-body">
+                <div class="calendar-month-view">
+                  <div class="calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+                  <div id="calendar-grid" class="calendar-grid" role="group" aria-labelledby="calendar-month"></div>
+                </div>
+              <aside class="calendar-sidebar" aria-label="当天与待安排事项">
+              <section class="calendar-agenda" aria-labelledby="calendar-day-title">
+                <div class="planner-heading"><div><p class="eyebrow">当天安排</p><h3 id="calendar-day-title" aria-live="polite"></h3></div><button type="button" class="secondary" id="calendar-add-action">在这天添加行动</button></div>
+                <div id="calendar-day-items" class="workspace-list"></div>
+              </section>
+              <details class="calendar-undated" open><summary id="calendar-undated-title">未设截止时间</summary><div id="calendar-undated-items" class="workspace-list"></div></details>
+              </aside>
+              </div>
+            </div>
+            <div id="action-list" class="workspace-list action-list" hidden></div>
           </section>
+        </section>
+
+        <section class="workspace-page" data-page="tasks" hidden>
+          <div class="page-toolbar">
+            <div class="page-toolbar-actions">
+              <button class="secondary" id="export-tasks" type="button">导出任务</button>
+              <button class="primary" id="open-task-dialog" type="button">新建求职任务</button>
+            </div>
+          </div>
+          <div id="task-message" class="workspace-message" role="status" aria-live="polite"></div>
+          <div class="task-workbench">
+            <aside class="workspace-card task-index" aria-label="求职任务列表">
+              <div class="filter-row">
+                <label for="task-status-filter">任务状态</label>
+                <select id="task-status-filter"><option value="active">进行中</option><option value="archived">已归档</option><option value="">全部任务</option></select>
+              </div>
+              <div id="task-list" class="task-list"></div>
+            </aside>
+            <section id="task-detail" class="workspace-card task-detail">
+              <div class="workspace-empty"><span>◎</span><h3>从一个具体目标开始</h3><p>选择已有任务继续，或新建任务并绑定目标岗位与个人材料。</p></div>
+            </section>
+          </div>
         </section>
 
         <section class="workspace-page" data-page="materials" hidden>
           <div class="page-toolbar material-page-toolbar">
-            <div>
-              <p class="eyebrow">PERSONAL MATERIALS</p>
-              <h2>个人材料库</h2>
-              <p>把简历、项目文档和笔记保存在本机，后续分析只引用达到相关性要求的内容。</p>
-            </div>
+            <button class="text-button" id="return-to-analysis" type="button" hidden>返回分析继续准备</button>
             <button class="secondary" id="export-materials" type="button">导出个人材料</button>
           </div>
 
@@ -166,7 +229,7 @@
           <div class="material-intake-grid">
             <section class="workspace-card material-upload-card">
               <div class="workspace-card-heading">
-                <div><p class="eyebrow">ADD MATERIAL</p><h2>先预览，再决定是否保存</h2></div>
+                <div><p class="eyebrow">添加材料</p><h2>先预览，再决定是否保存</h2></div>
                 <span class="local-only-mark">仅保存在本机</span>
               </div>
               <div class="knowledge-upload-zone">
@@ -187,7 +250,7 @@
 
             <section id="material-preview" class="workspace-card material-preview" hidden>
               <div class="workspace-card-heading">
-                <div><p class="eyebrow">PREVIEW</p><h2>解析预览</h2></div>
+                <div><p class="eyebrow">检查解析内容</p><h2>解析预览</h2></div>
                 <span id="preview-file-type" class="source-pill">等待文件</span>
               </div>
               <div id="preview-stats" class="preview-stats"></div>
@@ -199,6 +262,7 @@
                 <label for="material-category">材料分类</label>
                 <select id="material-category">
                   <option value="resume">简历</option>
+                  <option value="experience">经历补充</option>
                   <option value="project">项目文档</option>
                   <option value="course">课程材料</option>
                   <option value="note">求职笔记</option>
@@ -217,7 +281,7 @@
             <aside class="workspace-card material-index" aria-label="个人材料列表">
               <div class="material-filter-grid">
                 <div><label for="material-status-filter">使用状态</label><select id="material-status-filter"><option value="">全部状态</option><option value="active">使用中</option><option value="inactive">已停用</option></select></div>
-                <div><label for="material-category-filter">分类</label><select id="material-category-filter"><option value="">全部分类</option><option value="resume">简历</option><option value="project">项目文档</option><option value="course">课程材料</option><option value="note">求职笔记</option><option value="other">其他</option></select></div>
+                <div><label for="material-category-filter">分类</label><select id="material-category-filter"><option value="">全部分类</option><option value="resume">简历</option><option value="project">项目文档</option><option value="course">课程材料</option><option value="note">求职笔记</option><option value="experience">经历补充</option><option value="other">其他</option></select></div>
               </div>
               <div id="material-list" class="material-list"></div>
             </aside>
@@ -231,10 +295,10 @@
           </div>
         </section>
 
-        <dialog id="track-dialog" class="workspace-dialog">
+        <dialog aria-labelledby="track-dialog-title" id="track-dialog" class="workspace-dialog">
           <form id="track-form" method="dialog">
             <div class="dialog-heading">
-              <div><p class="eyebrow">NEW TARGET</p><h2>添加目标岗位</h2></div>
+              <div><p class="eyebrow">岗位与来源</p><h2 id="track-dialog-title">添加目标岗位</h2></div>
               <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
             </div>
             <fieldset class="source-switch">
@@ -243,8 +307,13 @@
               <label><input type="radio" name="track-source" value="manual_jd"><span><b>自行提供 JD</b><small>链接只作为来源标注，不自动访问</small></span></label>
             </fieldset>
             <div id="track-reviewed-fields" class="dialog-fields">
-              <label for="track-reviewed-job">选择职位</label>
-              <select id="track-reviewed-job" name="reviewed_job"><option value="">正在读取已核验职位…</option></select>
+              <p class="reviewed-job-intro">按顺序缩小范围，最后选择系统内已审核的具体岗位。</p>
+              <div class="reviewed-job-cascade" aria-label="已审核职位筛选">
+                <label class="reviewed-job-step"><span><b aria-hidden="true">01</b>行业</span><select id="track-reviewed-industry"><option value="">正在读取…</option></select></label>
+                <label class="reviewed-job-step"><span><b aria-hidden="true">02</b>企业类型</span><select id="track-reviewed-company-type" disabled><option value="">请先选择行业</option></select></label>
+                <label class="reviewed-job-step"><span><b aria-hidden="true">03</b>企业</span><select id="track-reviewed-company" disabled><option value="">请先选择企业类型</option></select></label>
+                <label class="reviewed-job-step"><span><b aria-hidden="true">04</b>具体岗位</span><select id="track-reviewed-job" name="reviewed_job" disabled><option value="">请先选择企业</option></select></label>
+              </div>
               <p id="track-reviewed-status" class="hint">读取系统内近期已审核职位。</p>
             </div>
             <div id="track-manual-fields" class="dialog-fields" hidden>
@@ -266,10 +335,10 @@
           </form>
         </dialog>
 
-        <dialog id="action-dialog" class="workspace-dialog">
+        <dialog aria-labelledby="action-dialog-title" id="action-dialog" class="workspace-dialog">
           <form id="action-form" method="dialog">
             <div class="dialog-heading">
-              <div><p class="eyebrow">NEXT ACTION</p><h2 id="action-dialog-title">添加行动</h2></div>
+              <div><p class="eyebrow">安排下一步</p><h2 id="action-dialog-title">添加行动</h2></div>
               <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
             </div>
             <input id="action-id" type="hidden">
@@ -289,10 +358,42 @@
           </form>
         </dialog>
 
-        <dialog id="material-delete-dialog" class="workspace-dialog material-delete-dialog">
+        <dialog aria-labelledby="task-dialog-title" id="task-dialog" class="workspace-dialog task-dialog">
+          <form id="task-form" method="dialog">
+            <div class="dialog-heading">
+              <div><p class="eyebrow">任务上下文</p><h2 id="task-dialog-title">新建求职任务</h2></div>
+              <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+            </div>
+            <label for="task-goal">这次要解决什么问题</label>
+            <textarea id="task-goal" maxlength="500" placeholder="例如：围绕目标岗位检查简历证据，并继续准备面试。"></textarea>
+            <div class="form-row">
+              <div><label for="task-intent">从哪个阶段开始</label><select id="task-intent"><option value="career_profile">背景诊断</option><option value="career_match">方向匹配</option><option value="career_jd">JD 分析</option><option value="career_resume">简历优化</option><option value="career_interview">面试准备</option><option value="career_planning">行动规划</option></select></div>
+              <div><label for="task-track">目标岗位（选填）</label><select id="task-track"><option value="">暂不绑定岗位</option></select></div>
+            </div>
+            <div class="form-row" id="task-job-scope-fields">
+              <div><label for="task-job-age">使用多久内核验的岗位</label><select id="task-job-age"><option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option></select></div>
+              <div><label for="task-job-mode">没有合适岗位时</label><select id="task-job-mode"><option value="verified_only">只使用已核验岗位</option><option value="official_links_if_missing">提供官方招聘入口</option></select></div>
+            </div>
+            <p class="hint" id="task-job-scope-hint">这组范围会跟随整个任务，后续阶段不需要重复设置。</p>
+            <fieldset class="task-material-choice">
+              <legend>个人材料</legend>
+              <label><input type="radio" name="task-material-mode" value="auto" checked><span><b>自动查找补充材料</b><small>从经历、项目等材料中查找相关内容；简历单独选用</small></span></label>
+              <label><input type="radio" name="task-material-mode" value="selected"><span><b>指定材料</b><small>保存任务时确认所选材料的当前版本，后续阶段沿用；材料变更后需重新确认</small></span></label>
+              <label><input type="radio" name="task-material-mode" value="off"><span><b>不使用个人材料</b><small>只使用本次输入和绑定的岗位信息</small></span></label>
+            </fieldset>
+            <label for="task-resume">这次任务使用哪份简历</label>
+            <select id="task-resume"><option value="">暂不使用简历</option></select>
+            <p id="task-resume-hint" class="hint">新任务默认选用材料库中的当前简历；已有任务不会随默认简历改变。</p>
+            <div id="task-material-picker" class="task-material-picker" hidden></div>
+            <p id="task-form-status" class="status-message" role="status"></p>
+            <div class="dialog-actions"><button class="secondary" value="cancel" type="submit">取消</button><button id="save-task" class="primary" value="default" type="submit">创建并开始</button></div>
+          </form>
+        </dialog>
+
+        <dialog aria-labelledby="material-delete-dialog-title" id="material-delete-dialog" class="workspace-dialog material-delete-dialog">
           <form id="material-delete-form" method="dialog">
             <div class="dialog-heading">
-              <div><p class="eyebrow">PERMANENT DELETE</p><h2>永久删除个人材料</h2></div>
+              <div><p class="eyebrow">删除确认</p><h2 id="material-delete-dialog-title">永久删除个人材料</h2></div>
               <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
             </div>
             <p id="material-delete-impact" class="deletion-impact"></p>
@@ -304,41 +405,74 @@
       </section>
 
       <div id="skill-workspace-view" hidden>
+      <div class="tool-scroll-progress" aria-hidden="true"><span></span></div>
+      <details id="tool-draft-options" class="tool-draft-options"><summary>草稿与保留设置</summary>
+      <p id="draft-status" class="draft-status" role="status">独立分析 · 各工具的输入与结果在本次页面内分别保留。</p>
+      <div class="draft-retention-bar"><span id="retention-status" role="status">刷新后不保留草稿</span><button id="configure-retention" class="text-button" type="button">设置本机保留</button></div>
+      </details>
+      <dialog id="skill-context-dialog" class="workspace-dialog" aria-labelledby="skill-context-title">
+        <form method="dialog"><h2 id="skill-context-title">继续当前任务，还是独立分析？</h2>
+          <p id="skill-context-description"></p><p class="hint">已有草稿与结果仍在本次页面内保留，切换后可以接着编辑。</p>
+          <p id="skill-context-status" role="status"></p>
+          <div class="dialog-actions"><button class="text-button" value="cancel">暂不切换</button><button type="button" class="secondary" id="skill-context-independent">独立使用此工具</button><button type="button" class="primary" id="skill-context-continue">沿用当前任务</button></div>
+        </form>
+      </dialog>
+      <section id="task-context-rail" class="task-context-rail" hidden aria-label="当前求职任务">
+        <ol id="analysis-task-route"></ol>
+        <div><p class="eyebrow">当前任务</p><h2 id="task-context-goal"></h2></div>
+          <dl><div><dt>目标岗位</dt><dd id="task-context-job">未绑定</dd></div><div><dt>岗位范围</dt><dd id="task-context-job-scope">近 30 天 · 仅已核验</dd></div><div><dt>简历</dt><dd id="task-context-resume">未指定</dd></div><div><dt>补充材料</dt><dd id="task-context-materials">自动查找</dd></div><div><dt>当前阶段</dt><dd id="task-context-stage"></dd></div></dl>
+        <button id="back-to-task" class="secondary" type="button">返回任务</button>
+      </section>
       <section class="flow" aria-label="当前处理流程">
         <div class="flow-step current" data-flow-step="1"><span>1</span><b>选择功能</b></div>
         <div class="flow-line"></div>
         <div class="flow-step" data-flow-step="2"><span>2</span><b>提供材料</b></div>
         <div class="flow-line"></div>
-        <div class="flow-step" data-flow-step="3"><span>3</span><b>确认输入</b></div>
+        <div class="flow-step" data-flow-step="3"><span>3</span><b>开始分析</b></div>
         <div class="flow-line"></div>
         <div class="flow-step" data-flow-step="4"><span>4</span><b>查看结果</b></div>
       </section>
 
-      <section class="intro">
-        <p class="eyebrow" id="skill-code">CAREER PROFILE</p>
+      <section class="intro tool-reveal">
+        <p class="eyebrow" id="skill-code">当前分析</p>
         <h1 id="skill-title">背景诊断</h1>
         <p id="skill-description">整理教育、项目、实习和技能信息，识别已经有证据支持的优势与仍需补充的部分。</p>
       </section>
 
+          <details class="guide-card tool-accordion tool-reveal" id="analysis-guide">
+            <summary><span><b>本阶段如何准备</b><small>准备清单 · 使用方法 · 结果说明</small></span><span class="guide-skill" id="guide-skill">背景诊断</span><i class="accordion-caret" aria-hidden="true">⌄</i></summary>
+            <section class="guide-section"><h3>建议准备</h3><ul id="skill-prepare"></ul></section>
+            <section class="guide-section"><h3>如何使用</h3><ol id="skill-guide"><li>整理用户明确提供的经历</li><li>区分事实、推断与缺失信息</li><li>给出下一步补充建议</li></ol></section>
+            <section class="guide-section"><h3>结果怎么看</h3><p id="skill-output"></p></section>
+            <details class="help-details"><summary>遇到问题怎么办</summary><div id="skill-help"></div></details>
+          </details>
+
       <div class="content-grid">
         <section class="card input-card">
-          <div class="card-heading"><div><p class="eyebrow">INPUT</p><h2>提供本次分析材料</h2></div><span class="required">至少填写一项</span></div>
+          <div class="card-heading tool-group-heading"><div><h2>你的需求与材料</h2></div><span class="required">从下面任意一项开始</span></div>
+          <div class="tool-input-block tool-reveal">
 
           <label for="request" id="request-label">你希望 Mako 解决什么问题</label>
           <textarea id="request" maxlength="12000" placeholder="例如：请分析我的背景更适合哪些数据分析方向，并指出目前证据不足的部分。"></textarea>
           <div class="counter"><span id="request-count">0</span> / 12000</div>
           <p id="request-hint" class="hint input-hint">可以说明目标岗位、已有经历和最希望确认的问题。</p>
 
+          </div>
+          <div class="tool-attachment-block tool-reveal">
           <div class="upload-zone">
-            <input id="material-file" type="file" accept=".txt,.md,text/plain,text/markdown">
-            <label for="material-file"><b id="upload-title">上传 TXT 或 Markdown 材料</b><span id="upload-description">可上传简历文本、JD 或经历说明；提交后将作为本次分析输入发送</span></label>
+            <input id="material-file" type="file" multiple accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <label for="material-file"><b id="upload-title">添加本次分析附件</b><span id="upload-description">可上传简历、JD 或经历说明，可查看解析预览</span><span>拖放或点击 / 按 Enter 选择，最多 5 份</span></label>
             <button id="clear-file" class="text-button" type="button" hidden>移除</button>
           </div>
-          <p id="file-status" class="hint">本次临时附件支持 UTF-8 编码的 .txt、.md，文本不超过 15000 字符；PDF 与 DOCX 请先保存到个人材料库。</p>
+          <p id="file-status" class="hint">支持 TXT、Markdown、文本 PDF、DOCX，每份最多 10 MB；PDF 最多 200 页，不支持扫描件或 OCR。本次附件不会自动存入材料库。</p>
+          <div id="attachment-previews" class="attachment-previews"></div>
+          </div>
+          <details id="reference-options" class="tool-accordion reference-options"><summary><span><b>简历与个人材料</b><small id="reference-summary">正在读取当前选择…</small></span><i class="accordion-caret" aria-hidden="true">⌄</i></summary>
+          <button id="open-material-library" class="text-button" type="button">打开个人材料库，管理长期参考材料</button>
 
-          <fieldset class="personal-knowledge-choice">
+          <fieldset id="personal-knowledge-choice" class="personal-knowledge-choice">
             <legend>本次是否使用个人材料</legend>
-            <label><input type="radio" name="personal-knowledge-mode" value="auto" checked><span><b>自动查找相关材料</b><small>只使用达到相关性要求、处于使用中且可检索的内容</small></span></label>
+              <label><input type="radio" name="personal-knowledge-mode" value="auto" checked><span><b>自动查找补充材料</b><small>从经历、项目等材料中查找相关内容；简历在下方单独选择</small></span></label>
             <label><input type="radio" name="personal-knowledge-mode" value="selected"><span><b>只使用指定材料</b><small>从个人材料库中选择最多 20 份材料</small></span></label>
             <label><input type="radio" name="personal-knowledge-mode" value="off"><span><b>本次不使用</b><small>仅使用当前输入和现有求职信息</small></span></label>
           </fieldset>
@@ -347,9 +481,24 @@
             <p id="personal-material-picker-status" class="hint">正在读取可用材料…</p>
           </div>
           <p id="personal-knowledge-hint" class="hint personal-knowledge-hint">Mako 会自动查找相关内容；如果没有达到相关性要求，本次分析不会引用个人材料。</p>
+            <div id="analysis-resume-choice" class="resume-choice" aria-describedby="analysis-resume-status">
+              <label for="analysis-resume-select">这次使用哪份简历</label>
+              <select id="analysis-resume-select"><option value="">正在读取简历…</option></select>
+              <label for="analysis-resume-file" id="analysis-resume-file-label" hidden>本次附件中哪份是简历</label>
+              <select id="analysis-resume-file" hidden><option value="">请先核对附件</option></select>
+              <p id="analysis-resume-status" class="hint" role="status" aria-live="polite">正在读取已保存的简历…</p>
+            </div>
+          <p id="material-selection-summary" class="selection-summary" aria-live="polite"></p>
+          </details>
+          <section id="task-material-consent" class="task-material-consent" hidden aria-label="任务材料确认">
+            <p id="task-material-consent-status" role="status"></p><ul id="task-material-consent-list"></ul>
+            <button id="reconfirm-task-materials" type="button" class="secondary" hidden>确认这些材料用于当前任务</button>
+          </section>
 
-          <details class="advanced" id="job-options">
-            <summary>岗位信息与分析范围</summary>
+          <details class="advanced tool-accordion" id="job-options">
+            <summary><span><b>目标岗位与分析范围</b><small id="job-options-summary">按需选择具体岗位，或直接做常规方向分析</small></span><i class="accordion-caret" aria-hidden="true">⌄</i></summary>
+            <p class="hint source-boundary">招聘信息来自公开网络及企业官方招聘平台；目录入口不代表具体岗位已经核验，实际岗位、条件和截止时间以企业官网为准。</p>
+            <p id="job-source-status" class="hint" role="status"></p>
             <div class="form-row" id="job-settings">
               <div><label for="job-age">岗位时效</label><select id="job-age"><option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option></select></div>
               <div><label for="job-mode">信息不足时</label><select id="job-mode"><option value="verified_only">只使用已核验岗位</option><option value="official_links_if_missing">提供官方招聘入口</option></select></div>
@@ -364,12 +513,24 @@
 
               <div id="verified-job-panel" class="source-panel">
                 <div class="job-search">
-                  <input id="job-query" type="search" maxlength="200" aria-label="搜索已核验岗位" placeholder="搜索公司、岗位或城市">
+                  <div><label for="job-company-search">企业 / 官方来源</label>
+                    <select id="job-company" hidden aria-label="已选择的官方来源"><option value="">全部来源</option></select>
+                    <div id="source-picker" class="source-picker">
+                      <div class="source-picker-input"><input id="job-company-search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="job-company-options" aria-describedby="job-company-status" autocomplete="off" maxlength="100" placeholder="搜索企业名称、类型或行业"><button id="clear-job-company" type="button" aria-label="清空企业选择">×</button></div>
+                      <ul id="job-company-options" role="listbox" aria-label="官方来源搜索结果" hidden></ul>
+                    </div>
+                    <p id="job-company-status" class="hint" role="status">当前：全部来源。输入关键词后从列表选择。</p>
+                    <button id="choose-job-source" type="button" class="text-button">重新读取官方来源</button>
+                  </div>
+                  <div><label for="job-query">岗位关键词 / 方向</label><input id="job-query" type="search" maxlength="200" aria-label="搜索已核验岗位" placeholder="例如：数据分析、产品运营"></div>
+                  <div><label for="job-location">地点</label><input id="job-location" type="text" disabled placeholder="独立地点筛选尚未接通" aria-describedby="job-location-hint"></div>
                   <button id="load-jobs" class="secondary" type="button">查找岗位</button>
                 </div>
+                <p id="job-location-hint" class="hint">当前最多显示 50 个符合条件的岗位。可在关键词中单独输入城市查询；尚不支持同时按关键词和独立地点筛选。</p>
                 <label for="job-select">目标岗位</label>
                 <select id="job-select"><option value="">未选择，使用常规方向分析</option></select>
                 <p id="job-status" class="hint">可选择有结构化 JD 原文的近期岗位；未选择时继续使用常规方向分析。</p>
+                <p id="verified-resume-boundary" class="hint" hidden>逐项岗位核对使用你确认的经历条目，不会自动阅读全文简历。需要整份简历参与分析时，请取消岗位选择，改用常规方向分析。</p>
                 <fieldset id="requirement-panel" hidden>
                   <legend>确认本次需要核对的岗位要求</legend>
                   <div id="requirement-list" class="requirement-list"></div>
@@ -386,45 +547,113 @@
               </div>
 
               <div id="match-evidence-panel">
-                <label for="evidence-detail">与岗位要求相关的已确认经历</label>
+                <label for="evidence-detail">补充希望一起参考的经历（选填）</label>
                 <textarea id="evidence-detail" maxlength="12000" placeholder="例如：课程项目中使用 Python 和 SQL 清洗并分析业务数据。每项经历建议单独一行。"></textarea>
                 <p class="hint">这里填写的内容和已上传材料仅用于本次分析，不写入长期画像或证据库。</p>
               </div>
             </section>
           </details>
 
-          <label class="confirm"><input id="confirm-input" type="checkbox"><span>我已检查上述材料，同意将其用于本次分析。</span></label>
           <div class="actions"><button id="submit" class="primary" type="button">开始背景诊断</button><button id="clear-input" class="secondary" type="button">清空本页</button></div>
           <div id="submit-status" class="status-message" role="status" aria-live="polite"></div>
+          <button id="view-completed-result" class="text-button" type="button" hidden>分析已完成 · 查看结果与下一步</button>
         </section>
 
-        <aside class="right-column">
-          <section class="card guide-card">
-            <div class="card-heading"><div><p class="eyebrow">GUIDE</p><h2>使用帮助</h2></div><span class="guide-skill" id="guide-skill">背景诊断</span></div>
-            <section class="guide-section"><h3>建议准备</h3><ul id="skill-prepare"></ul></section>
-            <section class="guide-section"><h3>如何使用</h3><ol id="skill-guide"><li>整理用户明确提供的经历</li><li>区分事实、推断与缺失信息</li><li>给出下一步补充建议</li></ol></section>
-            <section class="guide-section"><h3>结果怎么看</h3><p id="skill-output"></p></section>
-            <details class="help-details"><summary>遇到问题怎么办</summary><div id="skill-help"></div></details>
-          </section>
-          <section class="card output-card" id="output-card">
-            <div class="card-heading"><div><p class="eyebrow">OUTPUT</p><h2>分析结果</h2></div><span class="result-state" id="result-state">等待材料</span></div>
-            <div id="empty-output" class="empty">完成材料确认后，结果会显示在这里。</div>
+          <section class="card output-card tool-reveal" id="output-card">
+            <div class="card-heading tool-group-heading"><div><h2>分析结果</h2></div><span class="result-state" id="result-state">等待材料</span></div>
+            <div id="result-tabs" class="result-tabs" role="tablist" aria-label="分析结果阅读区">
+              <button id="conclusions-tab" type="button" role="tab" aria-selected="true" aria-controls="conclusions-panel">结论与下一步</button>
+              <button id="basis-tab" type="button" role="tab" aria-selected="false" aria-controls="basis-panel" tabindex="-1">分析依据</button>
+            </div>
+            <div class="result-columns">
+            <section id="conclusions-panel" class="result-panel" aria-labelledby="conclusions-tab">
+            <h3 class="result-column-heading">结论与下一步</h3>
+            <div id="empty-output" class="empty">开始分析后，结果会显示在这里。</div>
             <div id="result" class="result" hidden></div>
-            <section id="personal-result-sources" class="personal-result-sources" hidden aria-label="本次使用的个人材料"></section>
+            <section id="task-result-tools" class="task-result-tools" hidden aria-label="任务结果处理">
+              <div class="task-save-row"><div><h3>保留这次结果</h3><p>当前输入不会自动保存。确认后，只保存分析正文和引用来源。</p></div><button id="save-task-result" class="primary" type="button">保存到当前任务</button></div>
+              <div id="task-action-candidates" class="task-action-candidates" hidden></div>
+              <p id="task-result-status" class="hint" role="status" aria-live="polite"></p>
+              <div id="task-next-actions" class="task-next-actions"></div>
+            </section>
             <div id="result-actions" class="result-actions" hidden>
               <button id="copy-result" class="secondary" type="button">复制结果</button>
               <button id="download-result" class="secondary" type="button">下载 TXT</button>
               <button id="restart-flow" class="text-button" type="button">重新开始</button>
             </div>
             <p id="result-action-status" class="hint" role="status" aria-live="polite"></p>
+            </section>
+            <section id="basis-panel" class="result-panel basis-panel" aria-labelledby="basis-tab">
+              <h3 class="result-column-heading">分析依据</h3>
+              <p id="analysis-basis-context" class="hint">分析完成后，这里显示服务返回的材料引用。未提供逐条依据的结论，需要你继续核对。</p>
+              <div id="analysis-material-usage"></div>
+              <section id="personal-result-sources" class="personal-result-sources" hidden aria-label="本次使用的个人材料"></section>
+              <p class="hint">采用建议前，请核对引用内容是否完整、仍然适用。</p>
+            </section>
+            </div>
           </section>
-        </aside>
       </div>
       </div>
     </main>
   </div>
-  <script src="app.js?v=4" defer></script>
-  <script src="workspace.js?v=2" defer></script>
-  <script src="materials.js?v=1" defer></script>
+  <dialog id="continuity-dialog" class="workspace-dialog" aria-labelledby="continuity-title">
+    <form method="dialog"><div class="card-heading"><h2 id="continuity-title">草稿与续接</h2><button class="text-button" value="close" aria-label="关闭草稿设置">×</button></div>
+      <p>开启后，在此浏览器保留各任务与工具的输入、附件解析文本、结果正文副本和最近位置，最近一次保留后有效 7 天，最多 20 份草稿。</p>
+      <p class="hint">内容保存在此浏览器的本机存储中，使用该浏览器的人可以读取。不会保存原附件文件，也不会代替“保存到当前任务”。</p>
+      <label class="confirm"><input id="retain-on-device" type="checkbox"><span>允许在此浏览器保留草稿与位置</span></label>
+      <p id="continuity-message" class="hint" role="status"></p>
+      <div class="dialog-actions"><button id="clear-retained" class="text-button danger-text" type="button">关闭并清除本机保留</button><button class="primary" value="close">完成</button></div>
+    </form>
+  </dialog>
+  <button id="guide-launcher" class="guide-launcher" type="button" popovertarget="operation-guide" aria-controls="operation-guide" aria-expanded="false">
+    <img src="assets/mako-icon.png" width="30" height="30" alt=""><span>操作指南</span><span aria-hidden="true">?</span>
+  </button>
+  <section id="operation-guide" class="operation-guide" popover="auto" role="dialog" aria-labelledby="operation-guide-title">
+    <header class="operation-guide-header">
+      <img src="assets/mako-icon.png" width="42" height="42" alt="">
+      <div><p>每次只推进一小步</p><h2 id="operation-guide-title">Finn 的操作指南</h2></div>
+      <button class="text-button" type="button" popovertarget="operation-guide" popovertargetaction="hide" aria-label="收起操作指南" autofocus>×</button>
+    </header>
+    <div class="operation-guide-body">
+      <p id="guide-location" class="guide-location"></p>
+      <div id="guide-card-shell">
+        <div id="guide-tilt-surface">
+          <div id="guide-card" class="guide-flip-surface">
+            <div id="guide-card-front" class="guide-card-face">
+              <h3 id="guide-heading" tabindex="-1"></h3>
+              <p id="guide-description"></p>
+            </div>
+            <div id="guide-card-back" class="guide-card-face guide-card-reverse" aria-hidden="true" inert hidden>
+              <h3>准备这些材料</h3>
+              <ul id="guide-materials"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button id="guide-flip" class="text-button" type="button" aria-controls="guide-card" aria-pressed="false" hidden>查看准备材料 ↻</button>
+      <div id="guide-starts" class="guide-starts">
+        <button type="button" data-guide-start="direction"><b>还没确定求职方向</b><span>从自己的经历与优势开始 <i aria-hidden="true">→</i></span></button>
+        <button type="button" data-guide-start="job"><b>已经有目标岗位</b><span>先读懂 JD，再准备材料 <i aria-hidden="true">→</i></span></button>
+        <button type="button" data-guide-start="application"><b>准备投递或面试</b><span>把已有经历整理成可用表达 <i aria-hidden="true">→</i></span></button>
+      </div>
+      <ol id="guide-steps" class="guide-steps" hidden></ol>
+      <button id="guide-primary" class="primary" type="button" hidden></button>
+      <button id="guide-back" class="text-button" type="button" hidden>← 换个起点</button>
+      <p id="guide-status" class="hint" role="status"></p>
+    </div>
+    <footer>按需使用工具，不必把每个板块都做一遍。</footer>
+  </section>
+  <aside id="analysis-complete-toast" class="analysis-complete-toast" role="status" aria-live="polite" aria-atomic="true" hidden>
+    <span class="analysis-complete-mark" aria-hidden="true">✓</span>
+    <div><b id="analysis-complete-title">分析完成</b><p id="analysis-complete-message">结果与下一步已经准备好。</p><button id="analysis-complete-view" class="text-button" type="button">查看结果</button></div>
+    <button id="analysis-complete-dismiss" class="text-button" type="button" aria-label="关闭分析完成提示">×</button>
+  </aside>
+  <script src="presentation.js?v=5" defer></script>
+  <script src="app.js?v=20" defer></script>
+  <script src="workspace.js?v=16" defer></script>
+  <script src="materials.js?v=7" defer></script>
+  <script src="tasks.js?v=16" defer></script>
+  <script src="continuity.js?v=4" defer></script>
+  <script src="tool-page.js?v=2" defer></script>
 </body>
 </html>

@@ -22,10 +22,11 @@
     other: "其他"
   };
   const viewCopy = {
-    overview: ["今天先完成真正影响进度的事", "目标岗位、判断依据和下一步行动集中在这里，六项分析结果不再停留在一次对话里。"],
-    tracks: ["每个目标岗位都有一条清楚的进度线", "保留职位来源、当前阶段和关联行动，避免在不同分析板块之间重复整理同一份 JD。"],
-    actions: ["把分析结果变成可以完成的下一步", "每项行动都说明完成标准，由你决定何时开始、完成或重新打开。"],
-    materials: ["让个人材料在需要时提供依据", "材料先预览、再保存；后续分析只使用你启用且达到相关性要求的内容。"]
+    overview: ["准备好，向下一站前进。", ""],
+    tasks: ["求职任务", "围绕一个真实目标持续分析，岗位、材料与下一步都保留在同一条线上。"],
+    tracks: ["目标岗位", "从关注到面试，保留岗位依据，把准备接到具体机会。"],
+    actions: ["行动日程", "每件事都有完成标准，由你决定何时开始、完成或重新打开。"],
+    materials: ["个人材料库", "整理简历、项目与经历，让每次分析都有可核对的依据。"]
   };
 
   const state = {
@@ -34,10 +35,13 @@
     actions: [],
     summary: null,
     reviewedJobs: new Map(),
+    reviewedJobItems: [],
     selectedTrackId: null,
     editingActionId: null,
     retryTrackCreate: null,
-    retryActionCreate: null
+    retryActionCreate: null,
+    calendarMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+    calendarDay: ""
   };
 
   const workspaceView = document.getElementById("career-workspace-view");
@@ -95,13 +99,31 @@
     const payload = await readPayload(response);
     if (response.status === 409) {
       await loadWorkspaceData({quiet: true});
-      throw new Error("数据已在其他窗口发生变化，已重新加载最新内容。请确认后重试。");
+      const error = new Error(payload?.detail === "personal material selection requires reconfirmation" ? "任务材料已变化，请核对后重新确认。" : "数据已在其他窗口发生变化，已重新加载最新内容。请确认后重试。");
+      error.status = 409; error.detail = payload?.detail;
+      throw error;
     }
-    if (!response.ok) throw new Error(responseMessage(payload));
+    if (!response.ok) { const error = new Error(responseMessage(payload)); error.status = response.status; throw error; }
     return payload;
   };
 
-  window.MakoWorkspace = Object.freeze({fetch: workspaceFetch, ensureSession: startSession});
+  window.MakoWorkspace = Object.freeze({
+    fetch: workspaceFetch,
+    ensureSession: startSession,
+    refresh: () => loadWorkspaceData({quiet: true}),
+    showPage: page => switchWorkspacePage(page),
+    newAction: () => { switchWorkspacePage("actions"); openActionDialog(); },
+    showSkill: () => switchToSkill(),
+    position: () => ({view: skillView.hidden ? document.querySelector(".workspace-page:not([hidden])").dataset.page : "skill", date: state.calendarDay || formatDateTimeLocal(state.calendarMonth).slice(0, 10), actionView: document.getElementById("action-list").hidden ? "calendar" : "list"}),
+    restoreCalendar: (date, view) => { openCalendarDay(date); document.querySelector(`[data-action-view="${view}"]`).click(); },
+    showSuggestedActions: async () => {
+      await loadWorkspaceData({quiet: true});
+      document.getElementById("action-status-filter").value = "suggested";
+      document.getElementById("action-track-filter").value = "";
+      document.querySelector('[data-action-view="list"]').click();
+      switchWorkspacePage("actions");
+    }
+  });
 
   const textElement = (tag, text, className = "") => {
     const element = document.createElement(tag);
@@ -230,6 +252,7 @@
     document.getElementById("summary-track-count").textContent = activeTracks;
     document.getElementById("summary-action-count").textContent = state.actions.length;
 
+    renderDashboardSchedule();
     renderActionCollection(
       document.getElementById("overview-priority-list"),
       state.summary.today_priority,
@@ -320,7 +343,10 @@
     const heading = document.createElement("div");
     heading.append(textElement("h2", track.title), textElement("p", track.company_name));
     const sourcePill = textElement("span", track.source_kind === "reviewed_job" ? "官方已审核职位" : "用户提供 JD", "source-pill");
-    header.append(heading, sourcePill);
+    const headerActions = document.createElement("div");
+    headerActions.className = "track-header-actions";
+    headerActions.append(sourcePill, button("以此岗位开始任务", "start-track-task", track.track_id, "secondary"));
+    header.append(heading, headerActions);
 
     const meta = document.createElement("div");
     meta.className = "detail-meta";
@@ -433,6 +459,133 @@
     return state.actions.filter(item => (!status || item.status === status) && (!trackId || item.track_id === trackId));
   };
 
+  const datedEntries = (actions, trackFilter = "") => {
+    const byDay = new Map();
+    const add = (date, entry) => {
+      if (!byDay.has(date)) byDay.set(date, []);
+      byDay.get(date).push(entry);
+    };
+    actions.forEach(action => {
+      const local = formatDateTimeLocal(action.due_at);
+      if (local) add(local.slice(0, 10), {action, title: action.title, label: `${local.slice(11)} · ${statusLabels[action.status]}`, time: local});
+    });
+    state.tracks.forEach(({track}) => {
+      if (track.deadline && track.stage !== "closed" && (!trackFilter || track.track_id === trackFilter)) {
+        add(track.deadline, {track, title: `${track.company_name} · ${track.title}`, label: "报名截止", time: ""});
+      }
+    });
+    byDay.forEach(entries => entries.sort((a, b) => a.time.localeCompare(b.time)));
+    return byDay;
+  };
+
+  const openCalendarDay = key => {
+    const [year, month] = key.split("-").map(Number);
+    state.calendarMonth = new Date(year, month - 1, 1);
+    state.calendarDay = key;
+    document.getElementById("action-status-filter").value = "";
+    document.getElementById("action-track-filter").value = "";
+    document.querySelector('[data-action-view="calendar"]').click();
+    switchWorkspacePage("actions");
+  };
+
+  const renderDashboardSchedule = () => {
+    const entries = datedEntries(state.actions.filter(action => ["todo", "suggested"].includes(action.status)));
+    const week = document.getElementById("dashboard-week");
+    const upcoming = document.getElementById("dashboard-upcoming");
+    week.replaceChildren(); upcoming.replaceChildren();
+    const now = new Date();
+    const items = [];
+    for (let offset = 0; offset < 7; offset++) {
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+      const key = formatDateTimeLocal(day).slice(0, 10);
+      const dayItems = entries.get(key) || [];
+      const control = textElement("button", "", "dashboard-day");
+      control.type = "button"; control.dataset.calendarOpen = key;
+      control.setAttribute("aria-label", `${key}，${dayItems.length} 项截止事项`);
+      if (!offset) control.setAttribute("aria-current", "date");
+      control.append(textElement("small", !offset ? "今天" : new Intl.DateTimeFormat("zh-CN", {weekday: "short"}).format(day)), textElement("b", String(day.getDate())), textElement("span", dayItems.length ? `${dayItems.length}项` : "—"));
+      week.append(control);
+      dayItems.forEach(entry => items.push({...entry, date: key}));
+    }
+    items.slice(0, 3).forEach(item => {
+      const row = textElement("button", "", "dashboard-deadline");
+      row.type = "button"; row.dataset.calendarOpen = item.date;
+      const date = item.date.split("-");
+      row.append(textElement("span", `${Number(date[1])}/${Number(date[2])}`, "dashboard-deadline-date"), textElement("b", item.title), textElement("small", item.label));
+      upcoming.append(row);
+    });
+    if (!items.length) upcoming.append(textElement("p", "未来七天暂无截止事项。可以先安排一项准备行动。", "hint"));
+  };
+
+  const renderCalendar = () => {
+    const today = formatDateTimeLocal(new Date()).slice(0, 10);
+    if (!state.calendarDay) state.calendarDay = today;
+    const year = state.calendarMonth.getFullYear();
+    const month = state.calendarMonth.getMonth();
+    const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const actions = filteredActions().filter(action => action.status !== "cancelled");
+    const byDay = datedEntries(actions, document.getElementById("action-track-filter").value);
+    document.getElementById("calendar-month").textContent = `${year} 年 ${month + 1} 月`;
+    window.MakoContinuity?.schedule();
+    const grid = document.getElementById("calendar-grid");
+    const focusedDay = grid.contains(document.activeElement) ? document.activeElement.dataset.calendarDay : null;
+    grid.replaceChildren();
+    const offset = (state.calendarMonth.getDay() + 6) % 7;
+    const days = new Date(year, month + 1, 0).getDate();
+    const cells = Math.ceil((offset + days) / 7) * 7;
+    for (let index = 0; index < cells; index++) {
+      const day = index - offset + 1;
+      if (day < 1 || day > days) {
+        grid.appendChild(textElement("div", "", "calendar-blank"));
+        continue;
+      }
+      const key = `${monthKey}-${String(day).padStart(2, "0")}`;
+      const entries = byDay.get(key) || [];
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "calendar-day";
+      cell.dataset.calendarDay = key;
+      cell.setAttribute("aria-pressed", String(key === state.calendarDay));
+      cell.setAttribute("aria-label", `${month + 1} 月 ${day} 日${key === today ? "，今天" : ""}，${entries.length} 项${entries.length ? `：${entries.map(entry => `${entry.label} ${entry.title}`).join("；")}` : ""}`);
+      if (key === today) cell.setAttribute("aria-current", "date");
+      cell.appendChild(textElement("span", String(day), "calendar-date"));
+      entries.slice(0, 2).forEach(entry => {
+        const preview = textElement("span", "", `calendar-event${entry.track ? " deadline-event" : ""}`);
+        preview.append(textElement("span", entry.title, "calendar-event-title"), textElement("small", entry.label));
+        if (entry.action) preview.dataset.status = entry.action.status;
+        cell.appendChild(preview);
+      });
+      if (entries.length) cell.appendChild(textElement("span", `${entries.length}项${entries.some(entry => entry.track) ? "·截止" : ""}`, "calendar-count"));
+      grid.appendChild(cell);
+    }
+    if (focusedDay) grid.querySelector(`[data-calendar-day="${focusedDay}"]`)?.focus({preventScroll: true});
+    const [, selectedMonth, selectedDay] = state.calendarDay.split("-");
+    document.getElementById("calendar-day-title").textContent = `${Number(selectedMonth)} 月 ${Number(selectedDay)} 日${state.calendarDay === today ? " · 今天" : ""}`;
+    const agenda = document.getElementById("calendar-day-items");
+    agenda.replaceChildren();
+    const entries = byDay.get(state.calendarDay) || [];
+    if (!entries.length) agenda.appendChild(textElement("p", "这天没有符合筛选条件的截止事项，可以添加一项准备行动。", "hint"));
+    entries.forEach(entry => {
+      if (entry.action) {
+        const row = actionCard(entry.action);
+        row.prepend(textElement("span", entry.label, "calendar-agenda-time"));
+        agenda.appendChild(row);
+      } else {
+        const row = textElement("article", "", "calendar-deadline-row");
+        const open = textElement("button", "查看岗位", "secondary");
+        open.type = "button";
+        open.dataset.openTrackId = entry.track.track_id;
+        const copy = textElement("div", "");
+        copy.append(textElement("p", "报名截止 · 以岗位来源为准", "eyebrow"), textElement("h4", entry.title));
+        row.append(copy, open);
+        agenda.appendChild(row);
+      }
+    });
+    const undated = actions.filter(action => !formatDateTimeLocal(action.due_at));
+    document.getElementById("calendar-undated-title").textContent = `未设截止时间 · ${undated.length} 项`;
+    renderActionCollection(document.getElementById("calendar-undated-items"), undated, "没有未定日期的行动", "新行动可以在确定时间后加入日历。");
+  };
+
   const renderActions = () => {
     renderActionCollection(
       document.getElementById("action-list"),
@@ -440,6 +593,7 @@
       "没有符合条件的行动",
       "调整筛选条件，或添加一个有明确完成标准的行动。"
     );
+    renderCalendar();
   };
 
   const loadWorkspaceData = async ({quiet = false} = {}) => {
@@ -467,47 +621,117 @@
   };
 
   const switchWorkspacePage = page => {
+    if (window.MakoApp && !window.MakoApp.canSwitch()) return;
     workspaceView.hidden = false;
     skillView.hidden = true;
     document.querySelectorAll(".workspace-page").forEach(section => { section.hidden = section.dataset.page !== page; });
     workspaceNav.querySelectorAll("button").forEach(item => item.classList.toggle("active", item.dataset.workspaceView === page));
     skillNav.querySelectorAll("button").forEach(item => item.classList.remove("active"));
+    updateNavigation();
+    window.MakoContinuity?.navigate();
     document.getElementById("workspace-view-title").textContent = viewCopy[page][0];
     document.getElementById("workspace-view-description").textContent = viewCopy[page][1];
+    document.getElementById("workspace-view-description").hidden = !viewCopy[page][1];
+    if (page === "overview") window.MakoTasks?.loadOverview();
     if (page === "actions") renderActions();
     if (page === "tracks") renderTracks();
     if (page === "materials") window.MakoMaterials?.load();
+    if (page === "tasks") return window.MakoTasks?.load();
   };
 
   const switchToSkill = () => {
     workspaceView.hidden = true;
     skillView.hidden = false;
+    window.MakoToolPage?.activate();
     workspaceNav.querySelectorAll("button").forEach(item => item.classList.remove("active"));
+    updateNavigation();
+    window.MakoContinuity?.navigate();
+  };
+
+  const updateNavigation = () => {
+    document.querySelectorAll(".sidebar .nav-item").forEach(item => {
+      if (item.classList.contains("active")) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    });
+  };
+
+  const reviewedJobControls = () => ({
+    industry: document.getElementById("track-reviewed-industry"),
+    companyType: document.getElementById("track-reviewed-company-type"),
+    company: document.getElementById("track-reviewed-company"),
+    job: document.getElementById("track-reviewed-job")
+  });
+
+  const replaceReviewedOptions = (select, placeholder, values = []) => {
+    select.replaceChildren(new Option(placeholder, ""), ...values.map(value => new Option(value, value)));
+    select.disabled = !values.length;
+  };
+
+  const uniqueReviewedValues = (items, field) => [...new Set(items.map(item => item[field]).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+
+  const resetReviewedJobCascade = () => {
+    const controls = reviewedJobControls();
+    replaceReviewedOptions(controls.industry, "请选择行业", uniqueReviewedValues(state.reviewedJobItems, "industry"));
+    replaceReviewedOptions(controls.companyType, "请先选择行业");
+    replaceReviewedOptions(controls.company, "请先选择企业类型");
+    replaceReviewedOptions(controls.job, "请先选择企业");
+    document.getElementById("track-reviewed-status").textContent = state.reviewedJobItems.length
+      ? `共 ${state.reviewedJobItems.length} 个近期已审核职位，请从行业开始筛选。`
+      : "当前没有符合条件的已审核职位，可以改为自行提供 JD。";
+  };
+
+  const updateReviewedCompanyTypes = () => {
+    const controls = reviewedJobControls();
+    const items = state.reviewedJobItems.filter(item => item.industry === controls.industry.value);
+    replaceReviewedOptions(controls.companyType, controls.industry.value ? "请选择企业类型" : "请先选择行业", uniqueReviewedValues(items, "company_type"));
+    replaceReviewedOptions(controls.company, "请先选择企业类型");
+    replaceReviewedOptions(controls.job, "请先选择企业");
+  };
+
+  const updateReviewedCompanies = () => {
+    const controls = reviewedJobControls();
+    const items = state.reviewedJobItems.filter(item => item.industry === controls.industry.value && item.company_type === controls.companyType.value);
+    replaceReviewedOptions(controls.company, controls.companyType.value ? "请选择企业" : "请先选择企业类型", uniqueReviewedValues(items, "company_name"));
+    replaceReviewedOptions(controls.job, "请先选择企业");
+  };
+
+  const updateReviewedJobOptions = () => {
+    const controls = reviewedJobControls();
+    const items = state.reviewedJobItems.filter(item => item.industry === controls.industry.value && item.company_type === controls.companyType.value && item.company_name === controls.company.value);
+    controls.job.replaceChildren(new Option(controls.company.value ? "请选择具体岗位" : "请先选择企业", ""), ...items.map(item => {
+      const locations = item.locations.length ? ` · ${item.locations.join(" / ")}` : "";
+      return new Option(`${item.title}${locations}`, item.key);
+    }));
+    controls.job.disabled = !items.length;
+    document.getElementById("track-reviewed-status").textContent = items.length
+      ? `${controls.company.value}共有 ${items.length} 个近期已审核职位。`
+      : "该范围内没有符合条件的已审核职位。";
   };
 
   const loadReviewedJobs = async () => {
-    const select = document.getElementById("track-reviewed-job");
+    const controls = reviewedJobControls();
     const status = document.getElementById("track-reviewed-status");
-    select.disabled = true;
+    Object.values(controls).forEach(select => { select.disabled = true; });
     status.textContent = "正在读取系统内已审核职位…";
     try {
       const response = await fetch("/v2/workspace/jobs?max_age_days=90&limit=50");
       const payload = await readPayload(response);
       if (!response.ok) throw new Error(responseMessage(payload));
       state.reviewedJobs.clear();
-      select.replaceChildren(new Option("请选择一个目标岗位", ""));
-      payload.items.forEach(job => {
+      state.reviewedJobItems = payload.items.map(job => {
         const key = `${job.job_id}|${job.job_version_id}`;
         state.reviewedJobs.set(key, job);
-        const locations = job.locations.length ? ` · ${job.locations.join(" / ")}` : "";
-        select.appendChild(new Option(`${job.company_name} · ${job.title}${locations}`, key));
+        return {...job, key};
       });
-      status.textContent = payload.count ? `找到 ${payload.count} 个近期已审核职位。` : "当前没有符合条件的已审核职位，可以改为自行提供 JD。";
+      resetReviewedJobCascade();
     } catch (error) {
-      select.replaceChildren(new Option("职位列表暂时不可用", ""));
+      state.reviewedJobItems = [];
+      replaceReviewedOptions(controls.industry, "职位列表暂时不可用");
+      replaceReviewedOptions(controls.companyType, "请先选择行业");
+      replaceReviewedOptions(controls.company, "请先选择企业类型");
+      replaceReviewedOptions(controls.job, "请先选择企业");
       status.textContent = `${error.message || "职位列表读取失败"}，可以改为自行提供 JD。`;
-    } finally {
-      select.disabled = false;
     }
   };
 
@@ -518,6 +742,7 @@
     document.getElementById("track-form-status").textContent = "";
     trackDialog.showModal();
     if (!state.reviewedJobs.size) loadReviewedJobs();
+    else resetReviewedJobCascade();
   };
 
   const openActionDialog = (action = null, trackId = null) => {
@@ -711,6 +936,10 @@
   };
 
   const handleWorkspaceClick = async event => {
+    const pageLink = event.target.closest("[data-show-page]");
+    if (pageLink) return pageLink.dataset.showPage === "actions" ? openCalendarDay(formatDateTimeLocal(new Date()).slice(0, 10)) : switchWorkspacePage(pageLink.dataset.showPage);
+    const dayLink = event.target.closest("[data-calendar-open]");
+    if (dayLink) return openCalendarDay(dayLink.dataset.calendarOpen);
     const openTrack = event.target.closest("[data-open-track]");
     if (openTrack) return openTrackDialog();
     const openAction = event.target.closest("[data-open-action]");
@@ -733,6 +962,7 @@
     const {operation, id} = operationButton.dataset;
     try {
       if (operation === "add-track-action") openActionDialog(null, id);
+      else if (operation === "start-track-task") window.MakoTasks.openCreate({trackId: id});
       else if (operation === "save-track-detail") await saveTrackDetail(id);
       else if (operation === "delete-track") await deleteTrack(id);
       else await handleActionOperation(operation, id);
@@ -752,6 +982,32 @@
   document.getElementById("track-stage-filter").addEventListener("change", renderTracks);
   document.getElementById("action-status-filter").addEventListener("change", renderActions);
   document.getElementById("action-track-filter").addEventListener("change", renderActions);
+  document.querySelectorAll("[data-action-view]").forEach(control => control.addEventListener("click", () => {
+    document.querySelectorAll("[data-action-view]").forEach(item => item.setAttribute("aria-pressed", String(item === control)));
+    document.getElementById("action-calendar").hidden = control.dataset.actionView !== "calendar";
+    document.getElementById("action-list").hidden = control.dataset.actionView !== "list";
+  }));
+  document.querySelectorAll("[data-calendar-month]").forEach(control => control.addEventListener("click", () => {
+    state.calendarMonth.setMonth(state.calendarMonth.getMonth() + Number(control.dataset.calendarMonth));
+    state.calendarDay = formatDateTimeLocal(state.calendarMonth).slice(0, 10);
+    renderCalendar();
+  }));
+  document.getElementById("calendar-today").addEventListener("click", () => {
+    const today = new Date();
+    state.calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    state.calendarDay = formatDateTimeLocal(today).slice(0, 10);
+    renderCalendar();
+  });
+  document.getElementById("calendar-grid").addEventListener("click", event => {
+    const day = event.target.closest("[data-calendar-day]");
+    if (!day) return;
+    state.calendarDay = day.dataset.calendarDay;
+    renderCalendar();
+  });
+  document.getElementById("calendar-add-action").addEventListener("click", () => {
+    openActionDialog(null, document.getElementById("action-track-filter").value || null);
+    document.getElementById("action-due").value = `${state.calendarDay}T09:00`;
+  });
 
   document.querySelectorAll('input[name="track-source"]').forEach(input => input.addEventListener("change", () => {
     const manual = input.value === "manual_jd" && input.checked;
@@ -759,6 +1015,9 @@
     document.getElementById("track-reviewed-fields").hidden = manual;
     document.getElementById("track-manual-fields").hidden = !manual;
   }));
+  document.getElementById("track-reviewed-industry").addEventListener("change", updateReviewedCompanyTypes);
+  document.getElementById("track-reviewed-company-type").addEventListener("change", updateReviewedCompanies);
+  document.getElementById("track-reviewed-company").addEventListener("change", updateReviewedJobOptions);
 
   document.getElementById("track-form").addEventListener("submit", async event => {
     event.preventDefault();
@@ -811,12 +1070,12 @@
   document.getElementById("clear-workspace").addEventListener("click", async () => {
     try {
       const impact = await workspaceFetch("/deletion-impact");
-      if (!impact.tracks && !impact.actions) {
+      if (!impact.tracks && !impact.actions && !impact.tasks) {
         setMessage("当前工作区没有需要清除的数据。", "success");
         return;
       }
       const confirmed = window.confirm(
-        `将永久删除 ${impact.tracks} 个目标岗位和 ${impact.actions} 项行动。此操作无法撤销，是否继续？`
+        `将永久删除 ${impact.tracks} 个目标岗位、${impact.actions} 项行动和 ${impact.tasks || 0} 个求职任务。此操作无法撤销，是否继续？`
       );
       if (!confirmed) return;
       await workspaceFetch("?confirmation=DELETE_LOCAL_WORKSPACE", {method: "DELETE"});
@@ -826,6 +1085,148 @@
     } catch (error) {
       setMessage(error.message || "工作区清除失败", "error");
     }
+  });
+
+  const guide = document.getElementById("operation-guide");
+  const guideHeading = document.getElementById("guide-heading");
+  const guidePrimary = document.getElementById("guide-primary");
+  let guideAction = null;
+  const guideShell = document.getElementById("guide-card-shell");
+  const guideTilt = document.getElementById("guide-tilt-surface");
+  const guideCard = document.getElementById("guide-card");
+  const guideFront = document.getElementById("guide-card-front");
+  const guideReverse = document.getElementById("guide-card-back");
+  const guideFlip = document.getElementById("guide-flip");
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const mouseMotion = matchMedia("(hover: hover) and (pointer: fine)");
+  const resetGuideTilt = () => { guideTilt.style.transform = ""; };
+  const flipGuide = (flipped, animate = false) => {
+    resetGuideTilt();
+    guideCard.dataset.animate = String(animate);
+    guideCard.classList.toggle("is-flipped", flipped);
+    guideFront.inert = flipped;
+    guideFront.setAttribute("aria-hidden", String(flipped));
+    guideReverse.inert = !flipped;
+    guideReverse.setAttribute("aria-hidden", String(!flipped));
+    guideFlip.setAttribute("aria-pressed", String(flipped));
+    guideFlip.textContent = flipped ? "返回工具介绍 ↶" : "查看准备材料 ↻";
+  };
+  guideFlip.addEventListener("click", event => flipGuide(guideFlip.getAttribute("aria-pressed") !== "true", event.detail > 0));
+  guideShell.addEventListener("pointermove", event => {
+    if (guideFlip.hidden || guideFlip.getAttribute("aria-pressed") === "true" || event.pointerType !== "mouse" || reducedMotion.matches || !mouseMotion.matches || guideCard.getAnimations().length) return;
+    const rect = guideShell.getBoundingClientRect();
+    const x = Math.max(-1, Math.min(1, (event.clientX - rect.left) / rect.width * 2 - 1));
+    const y = Math.max(-1, Math.min(1, (event.clientY - rect.top) / rect.height * 2 - 1));
+    guideTilt.style.transform = "rotateX(" + (-y * 2) + "deg) rotateY(" + (x * 2) + "deg)";
+  });
+  guideShell.addEventListener("pointerleave", resetGuideTilt);
+  guide.addEventListener("keydown", resetGuideTilt);
+  reducedMotion.addEventListener("change", resetGuideTilt);
+  mouseMotion.addEventListener("change", resetGuideTilt);
+  const guideStarts = {
+    direction: {
+      title: "先认识自己，再缩小方向", description: "从背景诊断开始，把已有经历和还不确定的部分分开。",
+      steps: ["写下专业、项目经历与求职偏好。", "建立一个背景诊断任务，确认材料后再分析。", "保存值得保留的结果，再按需要进入方向匹配。"],
+      label: "从背景诊断开始", intent: "career_profile"
+    },
+    job: {
+      title: "围绕一个岗位，串起准备", description: "用同一个求职任务连接 JD 分析、简历与面试，减少重复提供材料。",
+      steps: ["备好完整 JD；已有目标岗位时，可在新任务中绑定。", "以 JD 分析建立任务，写清最想弄懂的问题。", "确认结果后保存，再沿用任务进入简历或面试阶段。"],
+      label: "建立 JD 分析任务", intent: "career_jd"
+    },
+    application: {
+      title: "先准备最近要用的那一份", description: "临近投递先优化简历；已收到面试邀请，可以在新任务中选“面试准备”。",
+      steps: ["备好目标 JD、简历和相关项目经历。", "选择简历优化或面试准备，写下这次要解决的问题。", "核对分析中的事实，把需要补齐的事项安排进日历。"],
+      label: "建立投递准备任务", intent: "career_resume"
+    }
+  };
+  const renderGuide = (route, contextual = false) => {
+    document.getElementById("guide-location").hidden = !route || !contextual;
+    guideAction = route;
+    flipGuide(false);
+    const materials = route?.materials || [];
+    guideShell.classList.toggle("has-materials", materials.length > 0);
+    guideFlip.hidden = guideReverse.hidden = !materials.length;
+    document.getElementById("guide-materials").replaceChildren(...materials.map(value => textElement("li", value)));
+    document.getElementById("guide-status").textContent = "";
+    guideHeading.textContent = route?.title || "不知道从哪里开始？";
+    document.getElementById("guide-description").textContent = route?.description || "选最接近你现状的一项，Finn 帮你找到第一步。";
+    document.getElementById("guide-starts").hidden = Boolean(route);
+    const steps = document.getElementById("guide-steps");
+    steps.hidden = !route;
+    steps.replaceChildren(...(route?.steps || []).map(value => textElement("li", value)));
+    guidePrimary.hidden = !route;
+    guidePrimary.textContent = route?.label || "";
+    document.getElementById("guide-back").hidden = !route;
+  };
+  const currentGuide = () => {
+    if (!skillView.hidden) {
+      const hasResult = !document.getElementById("result").hidden;
+      const inTask = !document.getElementById("task-context-rail").hidden;
+      const hasCandidates = !document.getElementById("task-action-candidates").hidden;
+      const saved = document.getElementById("save-task-result").textContent === "已保存";
+      const title = document.getElementById("skill-title").textContent;
+      document.getElementById("guide-location").textContent = `你在这里 · ${title}`;
+      return hasResult ? {
+        title: "分析之后，先核对再保留", description: "结果需要你的判断。先核对事实，再决定下一步。",
+        steps: ["检查经历、数字与引用来源，区分事实和建议。", inTask ? (saved ? "结果已保存到当前任务，可以返回任务继续准备。" : "在结果区点击“保存到当前任务”，保留正文与来源。") : "结果可复制或下载；开启本机保留后，可在刷新时恢复正文副本。", inTask ? (hasCandidates ? "勾选需要的行动建议，检查后加入日程并设置日期。" : "返回任务选择下一阶段，或到行动日程中手动添加事项。") : "想持续推进时，建立求职任务来连接后续准备。"],
+        label: "前往结果区核对", target: "#output-card", focusOnly: true
+      } : {
+        title: `这次先完成${title}`, description: document.getElementById("skill-description").textContent,
+        materials: [...document.querySelectorAll("#skill-prepare li")].map(item => item.textContent),
+        steps: [document.querySelector("#skill-prepare li")?.textContent || "整理这次分析需要的经历和材料。", "填写需求、添加附件，直接点击开始分析。", inTask ? "分析完成后，可保存到任务并继续下一个阶段。" : "独立分析可复制或下载结果，也可开启本机草稿保留。"],
+        label: "查看本阶段准备说明", target: "#analysis-guide summary", focusOnly: true
+      };
+    }
+    const page = document.querySelector(".workspace-page:not([hidden])")?.dataset.page || "overview";
+    document.getElementById("guide-location").textContent = `你在这里 · ${page === "overview" ? "我的工作台" : viewCopy[page][0]}`;
+    const continuing = document.querySelector('[data-dashboard-continue]');
+    const taskContinue = document.querySelector('[data-task-operation="continue"]');
+    return {
+      overview: continuing ? {title: "接着上次的准备继续", description: "工作台已显示一个进行中的任务，可以从它接着做。", steps: ["打开任务，核对当前岗位与材料。", "完成当前阶段，需要时沿用任务切换工具。", "保存结果，把确认后的行动安排到日历。"], label: "继续工作台上的任务", target: "[data-dashboard-continue]"} : null,
+      tasks: {title: "用一个任务，装下同一个目标", description: "任务连接你的岗位、材料与分析阶段。六个工具可以按需要选择。", steps: ["选择已有任务，或新建一个明确的求职目标。", "提供材料，点击开始分析，再查看结果。", "保存结果后沿用任务进入下一阶段。"], label: taskContinue ? "继续选中的任务" : "新建求职任务", target: taskContinue ? '[data-task-operation="continue"]' : "#open-task-dialog"},
+      tracks: {title: "先把一个目标岗位留在这里", description: "这里记录具体机会和投递进度；求职任务用来推进针对它的准备。", steps: ["添加已核验职位，或自行提供完整 JD。", "查看岗位详情，选择“以此岗位开始任务”。", "在同一任务内推进 JD、简历与面试准备。"], label: "添加一个目标岗位", target: '[data-page="tracks"] [data-open-track]'},
+      materials: {title: "先放入一份最有用的材料", description: "优先选择本次准备会用到的简历或项目复盘，不必一次整理完所有文件。", steps: ["选择 TXT、Markdown、文本 PDF 或 DOCX 文件。", "预览解析内容，核对后确认保存到本机。", "在求职任务中选择材料，或使用自动查找。"], label: "前往材料上传区", target: "#knowledge-file", focusOnly: true},
+      actions: {title: "给下一步一个具体日期", description: "日历按截止日期显示行动；点选某天可以查看当天完整事项。", steps: ["添加一项行动，或检查分析生成的待确认建议。", "写清完成标准，选择日期并保存。", "完成后勾选；需要改期时打开行动的“编辑”。"], label: "添加一项行动", target: '[data-page="actions"] [data-open-action]'}
+    }[page];
+  };
+  guide.addEventListener("beforetoggle", event => {
+    if (event.newState === "open") renderGuide(currentGuide(), true);
+    else resetGuideTilt();
+  });
+  guide.addEventListener("pointerdown", () => { guide.dataset.motion = "pointer"; });
+  guide.addEventListener("keydown", () => { guide.dataset.motion = "keyboard"; });
+  guide.addEventListener("toggle", event => {
+    document.getElementById("guide-launcher").setAttribute("aria-expanded", String(event.newState === "open"));
+  });
+  guide.addEventListener("click", event => {
+    const start = event.target.closest("[data-guide-start]");
+    if (start) { renderGuide(guideStarts[start.dataset.guideStart]); guideHeading.focus(); }
+  });
+  document.getElementById("guide-back").addEventListener("click", () => { renderGuide(null); guideHeading.focus(); });
+  guidePrimary.addEventListener("click", () => {
+    if (!guideAction) return;
+    if (!window.MakoApp.canSwitch()) {
+      document.getElementById("guide-status").textContent = "正在处理当前操作，完成后就可以前往。";
+      return;
+    }
+    const route = guideAction;
+    const target = route.target ? document.querySelector(route.target) : null;
+    if (!route.intent && (!target || !target.getClientRects().length)) {
+      renderGuide(currentGuide(), true);
+      document.getElementById("guide-status").textContent = "页面内容已变化，已更新指南。";
+      return;
+    }
+    guide.hidePopover();
+    if (route.intent) {
+      switchWorkspacePage("tasks");
+      window.MakoTasks.openCreate({intent: route.intent});
+    } else if (route.focusOnly) {
+      if (target.parentElement.tagName === "DETAILS") target.parentElement.open = true;
+      if (!target.matches("input, button, summary")) target.setAttribute("tabindex", "-1");
+      target.focus({preventScroll: true});
+      target.scrollIntoView({block: "center", behavior: "instant"});
+    } else target.click();
   });
 
   switchWorkspacePage("overview");

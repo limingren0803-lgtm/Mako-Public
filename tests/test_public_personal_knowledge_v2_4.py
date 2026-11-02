@@ -164,7 +164,7 @@ class PublicPersonalKnowledgeTests(unittest.TestCase):
         script = (ui_root / "materials.js").read_text(encoding="utf-8")
 
         self.assertIn('data-page="materials"', html)
-        self.assertIn('src="materials.js?v=1"', html)
+        self.assertIn('src="materials.js?v=7"', html)
         self.assertIn('window.MakoWorkspace.fetch("/materials/preview"', script)
         self.assertNotIn("X-Admin-Key", script)
 

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from anthropic import AsyncAnthropic
 
-from core.llm_utils import extract_text_content
+from core.llm_utils import extract_json_value, extract_text_content
 from core.model_usage import create_message
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class IntentRecognizer:
         self,
         api_key: str,
         base_url: Optional[str] = None,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = "claude-sonnet-4-6",
         confidence_threshold: float = 0.5,
     ):
         kwargs: Dict[str, Any] = {"api_key": api_key}
@@ -213,8 +213,7 @@ class IntentRecognizer:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = extract_text_content(resp.content)
-            s, e = raw.find("{"), raw.rfind("}") + 1
-            data = json.loads(raw[s:e])
+            data = extract_json_value(raw, dict)
             try:
                 data["intent"] = IntentCategory(data["intent"])
             except ValueError:

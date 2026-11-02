@@ -110,11 +110,11 @@ class BaseAgent:
 
     async def handle(self, req: Request) -> AgentResponse:
         t0 = time.monotonic()
-        self.stats.total += 1
         try:
             completion = await self._call_llm(req)
             ms = (time.monotonic() - t0) * 1000
             self.stats.success += 1
+            self.stats.total += 1
             self.stats.total_ms += ms
             needs_review = self._needs_review(completion.text)
             return AgentResponse(
@@ -130,6 +130,7 @@ class BaseAgent:
         except Exception as ex:
             ms = (time.monotonic() - t0) * 1000
             self.stats.total_ms += ms
+            self.stats.total += 1
             logger.error("%s 处理失败: error_type=%s", self.agent_type.value, type(ex).__name__)
             return AgentResponse(
                 agent_type=self.agent_type,
@@ -286,7 +287,7 @@ class AgentOrchestrator:
         self,
         api_key:  str,
         base_url: Optional[str] = None,
-        model:    str = "claude-3-5-sonnet-20241022",
+        model:    str = "claude-sonnet-4-6",
         skill_manager: Optional[Any] = None,
     ):
         kwargs: Dict[str, Any] = {"api_key": api_key}

@@ -13,7 +13,8 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Coroutine, Dict, List, Literal, Optional
+from zoneinfo import ZoneInfo
 
 
 _ROOT = str(pathlib.Path(__file__).parent.parent.resolve())
@@ -81,7 +82,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v2.4.0             ║
+   ║           Mako  v2.9.0             ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -99,6 +100,45 @@ _evidence_registry = None
 _career_workspace_registry = None
 _personal_knowledge_registry = None
 _personal_knowledge_index = None
+_background_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _track_background_task(
+    coro: Coroutine[Any, Any, Any],
+    label: str,
+) -> asyncio.Task[Any]:
+    """记录后台任务，使异常可见并在服务关闭时统一收尾。"""
+    task = asyncio.create_task(coro, name=label)
+    _background_tasks.add(task)
+
+    def _completed(completed: asyncio.Task[Any]) -> None:
+        _background_tasks.discard(completed)
+        if completed.cancelled():
+            return
+        error = completed.exception()
+        if error is not None:
+            logger.error(
+                "后台任务失败: task=%s error_type=%s",
+                label,
+                type(error).__name__,
+            )
+
+    task.add_done_callback(_completed)
+    return task
+
+
+async def _drain_background_tasks(timeout_s: float = 10.0) -> None:
+    tasks = tuple(_background_tasks)
+    if not tasks:
+        return
+    _, pending = await asyncio.wait(tasks, timeout=timeout_s)
+    if pending:
+        logger.warning("关闭时取消未完成后台任务: count=%s", len(pending))
+        for task in pending:
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 
 def _anthropic_cfg() -> Dict[str, Any]:
     key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -106,7 +146,7 @@ def _anthropic_cfg() -> Dict[str, Any]:
         raise RuntimeError("未设置 ANTHROPIC_API_KEY")
     cfg: Dict[str, Any] = {
         "api_key":  key,
-        "model":    os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").strip(),
+        "model":    os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip(),
     }
     base_url = os.getenv("ANTHROPIC_BASE_URL", "").strip()
     if base_url:
@@ -162,6 +202,10 @@ async def lifespan(app: FastAPI):
     )
 
     # 记忆管理器（Redis 工作记忆 + ChromaDB 情景记忆/用户画像）
+    allow_local_chroma_fallback = env_bool(
+        "MAKO_ALLOW_LOCAL_CHROMA_FALLBACK",
+        default=False,
+    )
     _memory = MemoryManager(
         redis_url=os.getenv("REDIS_URL", "redis://redis:6379/0"),
         chroma_host=os.getenv("CHROMA_HOST", "chromadb"),
@@ -170,6 +214,7 @@ async def lifespan(app: FastAPI):
         api_key=cfg["api_key"],
         base_url=cfg.get("base_url"),
         model=cfg["model"],
+        allow_local_chroma_fallback=allow_local_chroma_fallback,
     )
 
     # MCP 工具管理器 + RAG 知识库（基于 ChromaDB 的真实检索）
@@ -186,6 +231,7 @@ async def lifespan(app: FastAPI):
             "MAKO_KNOWLEDGE_REGISTRY_PATH",
             "/app/data/knowledge/registry.sqlite3",
         ),
+        allow_local_chroma_fallback=allow_local_chroma_fallback,
     )
     logger.info(f"知识库已加载: {kb.doc_count} 个文档片段")
     _evidence_registry = EvidenceRegistry(
@@ -204,6 +250,7 @@ async def lifespan(app: FastAPI):
         _career_workspace_registry,
         knowledge_provider=lambda: _knowledge_base_instance(),
         evidence_provider=lambda: _v2_evidence_registry(),
+        personal_registry_provider=lambda: _personal_knowledge_registry,
     )
     _personal_knowledge_registry = PersonalKnowledgeRegistry(
         os.getenv(
@@ -215,12 +262,13 @@ async def lifespan(app: FastAPI):
         chroma_host=os.getenv("CHROMA_HOST", "chromadb"),
         chroma_port=int(os.getenv("CHROMA_PORT", "8000")),
         chroma_path=os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/data/chroma"),
-        allow_local_chroma_fallback=False,
+        allow_local_chroma_fallback=allow_local_chroma_fallback,
     )
     configure_personal_knowledge_api(
         _personal_knowledge_registry,
         _personal_knowledge_index,
         analysis_provider=_run_personal_knowledge_analysis,
+        task_reference_counter=_career_workspace_registry.count_tasks_referencing_material,
     )
 
     def knowledge_fallback(params: Dict[str, Any], context: Optional[Dict[str, Any]], error: str):
@@ -261,21 +309,23 @@ async def lifespan(app: FastAPI):
     )
     await _monitor.start()
 
-    # 评测器
-    _evaluator = EndToEndEvaluator(
-        orchestrator=_orchestrator,
-        recognizer=recognizer,
-        api_key=cfg["api_key"],
-        base_url=cfg.get("base_url"),
-        model=cfg["model"],
-        baseline_path=os.getenv("EVAL_BASELINE_PATH", "/app/data/eval/baseline.json"),
-    )
+    try:
+        # 评测器
+        _evaluator = EndToEndEvaluator(
+            orchestrator=_orchestrator,
+            recognizer=recognizer,
+            api_key=cfg["api_key"],
+            base_url=cfg.get("base_url"),
+            model=cfg["model"],
+            baseline_path=os.getenv("EVAL_BASELINE_PATH", "/app/data/eval/baseline.json"),
+        )
 
-    logger.info("Mako 已就绪")
-    yield
-
-    await _monitor.stop()
-    logger.info("Mako 已关闭")
+        logger.info("Mako 已就绪")
+        yield
+    finally:
+        await _drain_background_tasks()
+        await _monitor.stop()
+        logger.info("Mako 已关闭")
 
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
@@ -283,7 +333,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="2.4.0",
+    version="2.9.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
@@ -340,7 +390,9 @@ async def attach_request_id(request: FastAPIRequest, call_next):
 
 @app.exception_handler(StarletteHTTPException)
 async def http_error_response(request: FastAPIRequest, exc: StarletteHTTPException):
-    message = exc.detail if isinstance(exc.detail, str) else "请求处理失败"
+    message = exc.detail if isinstance(exc.detail, str) else (
+        exc.detail.get("message", "请求处理失败") if isinstance(exc.detail, dict) else "请求处理失败"
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -410,6 +462,7 @@ class ChatRequest(BaseModel):
         default="verified_only",
         pattern="^(verified_only|official_links_if_missing)$",
     )
+    memory_mode: Literal["conversation", "none"] = "conversation"
 
     @field_validator("user_id")
     @classmethod
@@ -467,6 +520,8 @@ class ChatResponse(BaseModel):
     response_complete: bool = True
     continuation_used: bool = False
     quality_flags: List[str] = Field(default_factory=list)
+    memory_mode: Literal["conversation", "none"] = "conversation"
+    conversation_persisted: bool = True
 
 
 # ponytail: This five-minute cache assumes one API process. Move it to Redis
@@ -546,6 +601,8 @@ class V2WorkspaceJobOption(BaseModel):
     job_version_id: str
     source_id: str
     company_name: str
+    industry: str
+    company_type: str
     title: str
     locations: List[str] = Field(default_factory=list)
     source_url: str
@@ -676,7 +733,7 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
             raise HTTPException(409, "Idempotency-Key 已用于其他请求")
         task = existing[1]
     else:
-        task = asyncio.create_task(_run_chat(req, http_request))
+        task = _track_background_task(_run_chat(req, http_request), "idempotent-chat")
         _chat_requests[key] = (fingerprint, task)
         asyncio.get_running_loop().call_later(300, _expire_chat_request, key, task)
 
@@ -717,14 +774,17 @@ async def _run_chat(
     except ValueError as exc:
         raise HTTPException(422, "one or more job sources are unavailable") from exc
 
-    # 1. 读取记忆上下文
-    mem_ctx = await _memory.get_context(req.user_id, conv_id, query=req.message)
+    # 1. 读取记忆上下文；临时分析不读取、不写入任何对话记忆。
+    mem_ctx = (
+        await _memory.get_context(req.user_id, conv_id, query=req.message)
+        if req.memory_mode == "conversation" else None
+    )
 
     # 2. 构建编排请求（含对话历史，用于意图识别上下文）
     history = [
         {"role": m.role.value, "content": m.content}
         for m in mem_ctx.recent_messages[-5:]
-    ] if mem_ctx.recent_messages else None
+    ] if mem_ctx and mem_ctx.recent_messages else None
 
     if req.career_intent:
         intent = IntentCategory(req.career_intent)
@@ -746,7 +806,15 @@ async def _run_chat(
         data_mode=req.job_data_mode,
         source_options=job_source_options,
     )
-    context_parts = [mem_ctx.to_prompt_text()]
+    context_parts = [mem_ctx.to_prompt_text()] if mem_ctx else []
+    if intent.value.startswith("career_"):
+        current_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        context_parts.append(
+            "[服务端可信时间基准]\n"
+            f"当前日期（Asia/Shanghai）：{current_date}。"
+            "比较招聘截止日期、考试日期和行动节点时以此日期为准；"
+            "早于当前日期的明确日期已经过期。日期缺少年份或信息不完整时保持待确认。"
+        )
     if knowledge_text:
         context_parts.append(knowledge_text)
     if job_text:
@@ -769,15 +837,22 @@ async def _run_chat(
     # 3. 执行
     result = await _orchestrator.run(orch_req)
 
-    # 4. 写入记忆
-    await _memory.add_message(req.user_id, conv_id, MsgRole.USER, req.message)
-    await _memory.add_message(req.user_id, conv_id, MsgRole.ASSISTANT, result.response)
+    # A provider can return an empty completion twice (initial + continuation).
+    # Treat that as a retryable upstream failure before any conversation state is written.
+    if not result.response.strip():
+        raise HTTPException(502, "模型未返回可用内容，请重试")
 
-    # 5. 仅当检测到新的职业信息时更新用户画像（不阻塞响应）
-    if _should_update_career_profile(req.message):
-        asyncio.create_task(
-            _memory.update_profile(req.user_id, conv_id)
-        )
+    if req.memory_mode == "conversation":
+        # 4. 写入记忆
+        await _memory.add_message(req.user_id, conv_id, MsgRole.USER, req.message)
+        await _memory.add_message(req.user_id, conv_id, MsgRole.ASSISTANT, result.response)
+
+        # 5. 仅当检测到新的职业信息时更新用户画像（不阻塞响应）
+        if _should_update_career_profile(req.message):
+            _track_background_task(
+                _memory.update_profile(req.user_id, conv_id),
+                "career-profile-update",
+            )
 
     return ChatResponse(
         request_id=result.request_id,
@@ -797,6 +872,8 @@ async def _run_chat(
         response_complete=result.response_complete,
         continuation_used=result.continuation_used,
         quality_flags=result.quality_flags,
+        memory_mode=req.memory_mode,
+        conversation_persisted=req.memory_mode == "conversation",
     )
 
 
@@ -1210,6 +1287,8 @@ async def list_v2_workspace_jobs(
                 job_version_id=version_id,
                 source_id=str(job["source_id"]),
                 company_name=company_name,
+                industry=str(job.get("industry") or "未分类"),
+                company_type=str(job.get("company_type") or "未分类"),
                 title=title,
                 locations=locations,
                 source_url=str(job.get("source_url") or payload.get("source_url") or ""),
@@ -1646,6 +1725,28 @@ class BatchDocInput(BaseModel):
         return documents
 
 
+class RecruitmentSummaryInput(BaseModel):
+    job_families: List[str] = Field(default_factory=list, max_length=30)
+    locations: List[str] = Field(default_factory=list, max_length=50)
+    cohorts: List[str] = Field(default_factory=list, max_length=10)
+    recruitment_types: List[str] = Field(default_factory=list, max_length=10)
+    deadline: Optional[str] = Field(default=None, max_length=100)
+    verified_at: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    source_url: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("job_families", "locations", "cohorts", "recruitment_types")
+    @classmethod
+    def normalize_summary_values(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for value in values:
+            clean = " ".join(str(value).split())
+            if not clean or len(clean) > 100:
+                raise ValueError("recruitment summary values must contain 1-100 characters")
+            if clean not in normalized:
+                normalized.append(clean)
+        return normalized
+
+
 class KnowledgeSourceInput(BaseModel):
     """Registered official source used by the controlled refresh pipeline."""
     company_name: str = Field(min_length=1, max_length=200)
@@ -1658,7 +1759,9 @@ class KnowledgeSourceInput(BaseModel):
     automation_allowed: bool = False
     policy_url: Optional[str] = Field(default=None, max_length=2000)
     industry: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    company_type: Optional[str] = Field(default=None, min_length=1, max_length=100)
     recruitment_channels: List[str] = Field(default_factory=list, max_length=10)
+    recruitment_summary: Optional[RecruitmentSummaryInput] = None
     support_level: str = Field(
         default="official_directory",
         pattern="^(official_directory|manual_import|structured_import|managed_refresh)$",
@@ -1899,6 +2002,7 @@ async def register_knowledge_source(body: KnowledgeSourceInput):
 async def list_knowledge_sources(
     status: Optional[str] = Query(default=None),
     industry: Optional[str] = Query(default=None, max_length=100),
+    company_type: Optional[str] = Query(default=None, max_length=100),
     support_level: Optional[str] = Query(default=None, max_length=50),
 ):
     """List registered sources and their refresh state."""
@@ -1916,6 +2020,7 @@ async def list_knowledge_sources(
         "sources": _knowledge_base_instance().list_sources(
             status=status,
             industry=industry,
+            company_type=company_type,
             support_level=support_level,
         )
     }
@@ -2036,6 +2141,7 @@ async def refresh_official_job_source(source_id: str):
 @app.get("/jobs/sources", tags=["职位情报"])
 async def list_public_job_sources(
     industry: Optional[str] = Query(default=None, max_length=100),
+    company_type: Optional[str] = Query(default=None, max_length=100),
     support_level: Optional[str] = Query(default=None, max_length=50),
 ):
     """List verified official recruitment entry points without operational policy fields."""
@@ -2050,6 +2156,7 @@ async def list_public_job_sources(
     sources = _knowledge_base_instance().list_sources(
         status="active",
         industry=industry,
+        company_type=company_type,
         support_level=support_level,
     )
     public_fields = (
@@ -2058,7 +2165,9 @@ async def list_public_job_sources(
         "official_domain",
         "source_url",
         "industry",
+        "company_type",
         "recruitment_channels",
+        "recruitment_summary",
         "support_level",
         "verified_at",
     )

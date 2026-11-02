@@ -10,10 +10,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from core.career_workspace import ActionItem, ActionStatus, JobTrack, JobTrackSourceKind
+from core.career_workspace import (
+    ActionItem,
+    ActionStatus,
+    CareerTask,
+    JobTrack,
+    JobTrackSourceKind,
+)
 
 
-WORKSPACE_SCHEMA_VERSION = 1
+WORKSPACE_SCHEMA_VERSION = 2
 LOCAL_WORKSPACE_ID = "local-default"
 
 
@@ -44,7 +50,7 @@ def request_fingerprint(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _payload(model: JobTrack | ActionItem) -> str:
+def _payload(model: JobTrack | ActionItem | CareerTask) -> str:
     return json.dumps(
         model.model_dump(mode="json"),
         ensure_ascii=False,
@@ -94,8 +100,8 @@ class CareerWorkspaceRegistry:
             ).fetchone()
             if row and int(row["schema_version"]) > WORKSPACE_SCHEMA_VERSION:
                 raise WorkspaceSchemaError("workspace database schema is newer than this application")
-            if row and int(row["schema_version"]) < WORKSPACE_SCHEMA_VERSION:
-                raise WorkspaceSchemaError("workspace database requires an explicit migration")
+            if row and int(row["schema_version"]) < 1:
+                raise WorkspaceSchemaError("workspace database schema is unsupported")
             if not row:
                 connection.execute(
                     "INSERT INTO workspace_schema(singleton, schema_version) VALUES (1, ?)",
@@ -141,6 +147,24 @@ class CareerWorkspaceRegistry:
                 CREATE INDEX IF NOT EXISTS idx_actions_track
                     ON action_items(track_id, status, action_id);
 
+                CREATE TABLE IF NOT EXISTS career_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    career_intent TEXT NOT NULL,
+                    track_id TEXT,
+                    job_id TEXT,
+                    job_version_id TEXT,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    revision INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_career_tasks_status_updated
+                    ON career_tasks(workspace_id, status, updated_at DESC, task_id);
+                CREATE INDEX IF NOT EXISTS idx_career_tasks_track
+                    ON career_tasks(track_id, status, task_id);
+
                 CREATE TABLE IF NOT EXISTS idempotency_keys (
                     operation TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL,
@@ -151,6 +175,11 @@ class CareerWorkspaceRegistry:
                 );
                 """
             )
+            if row and int(row["schema_version"]) < WORKSPACE_SCHEMA_VERSION:
+                connection.execute(
+                    "UPDATE workspace_schema SET schema_version = ? WHERE singleton = 1",
+                    (WORKSPACE_SCHEMA_VERSION,),
+                )
 
     @staticmethod
     def _track_from_row(row: sqlite3.Row) -> JobTrack:
@@ -159,6 +188,10 @@ class CareerWorkspaceRegistry:
     @staticmethod
     def _action_from_row(row: sqlite3.Row) -> ActionItem:
         return ActionItem.model_validate_json(row["payload"])
+
+    @staticmethod
+    def _task_from_row(row: sqlite3.Row) -> CareerTask:
+        return CareerTask.model_validate_json(row["payload"])
 
     @staticmethod
     def _validate_idempotency_key(value: Optional[str]) -> Optional[str]:
@@ -352,7 +385,14 @@ class CareerWorkspaceRegistry:
                 "SELECT COUNT(*) AS count FROM action_items WHERE track_id = ?",
                 (track_id,),
             ).fetchone()
-        return {"tracks": 1, "actions": int(row["count"])}
+            task_count = int(connection.execute(
+                "SELECT COUNT(*) FROM career_tasks WHERE track_id = ?",
+                (track_id,),
+            ).fetchone()[0])
+        impact = {"tracks": 1, "actions": int(row["count"])}
+        if task_count:
+            impact["task_references"] = task_count
+        return impact
 
     def delete_track(
         self,
@@ -486,13 +526,60 @@ class CareerWorkspaceRegistry:
             )
         return action
 
-    def create_actions(self, actions: List[ActionItem]) -> List[ActionItem]:
+    def create_actions(
+        self,
+        actions: List[ActionItem],
+        *,
+        idempotency_key: Optional[str] = None,
+        request_hash: Optional[str] = None,
+        task_id: Optional[str] = None,
+        expected_task_revision: Optional[int] = None,
+    ) -> List[ActionItem]:
         """Insert one server-generated suggestion set atomically."""
         if not actions:
             raise ValueError("at least one action is required")
         if len({item.action_id for item in actions}) != len(actions):
             raise WorkspaceConflictError("action_id is duplicated")
+        if idempotency_key is not None and not request_hash:
+            raise ValueError("request_hash is required with Idempotency-Key")
+        if bool(task_id) != bool(expected_task_revision):
+            raise ValueError("task_id and expected_task_revision must be provided together")
+        if task_id and any(item.task_id != task_id for item in actions):
+            raise WorkspaceReferenceError("action task reference does not match the request")
         with self._lock, self._connection() as connection:
+            if task_id:
+                task = connection.execute(
+                    "SELECT status, revision FROM career_tasks WHERE task_id = ? AND workspace_id = ?",
+                    (task_id, LOCAL_WORKSPACE_ID),
+                ).fetchone()
+                if not task:
+                    raise WorkspaceReferenceError("task does not exist")
+                if int(task["revision"]) != expected_task_revision:
+                    raise WorkspaceConflictError("task was updated by another request")
+                if task["status"] != "active":
+                    raise WorkspaceConflictError("archived task cannot create suggestions")
+            existing_ids = self._idempotent_resource(
+                connection,
+                operation="create_action_suggestions",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash or "",
+            )
+            if existing_ids:
+                try:
+                    action_ids = json.loads(existing_ids)
+                except json.JSONDecodeError as exc:
+                    raise WorkspaceConflictError("idempotent suggestion record is invalid") from exc
+                if not isinstance(action_ids, list) or not action_ids:
+                    raise WorkspaceConflictError("idempotent suggestion record is invalid")
+                rows = connection.execute(
+                    f"SELECT payload FROM action_items WHERE action_id IN ({','.join('?' for _ in action_ids)})",
+                    tuple(action_ids),
+                ).fetchall()
+                parsed = [self._action_from_row(row) for row in rows]
+                found = {item.action_id: item for item in parsed}
+                if len(found) != len(action_ids):
+                    raise WorkspaceConflictError("idempotent suggestions no longer exist")
+                return [found[action_id] for action_id in action_ids]
             track_ids = {item.track_id for item in actions if item.track_id}
             for track_id in track_ids:
                 track = connection.execute(
@@ -529,7 +616,194 @@ class CareerWorkspaceRegistry:
                         action.revision,
                     ),
                 )
+            self._remember_idempotency(
+                connection,
+                operation="create_action_suggestions",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash or "",
+                resource_id=json.dumps([item.action_id for item in actions]),
+                created_at=actions[0].created_at.isoformat(),
+            )
         return actions
+
+    def get_task(self, task_id: str) -> Optional[CareerTask]:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT payload FROM career_tasks WHERE task_id = ? AND workspace_id = ?",
+                (task_id, LOCAL_WORKSPACE_ID),
+            ).fetchone()
+        return self._task_from_row(row) if row else None
+
+    def list_tasks(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: Optional[int] = 100,
+    ) -> List[CareerTask]:
+        query = "SELECT payload FROM career_tasks WHERE workspace_id = ?"
+        params: List[Any] = [LOCAL_WORKSPACE_ID]
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC, task_id"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(min(max(limit, 1), 200))
+        with self._connection() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [self._task_from_row(row) for row in rows]
+
+    def create_task(
+        self,
+        task: CareerTask,
+        *,
+        idempotency_key: Optional[str] = None,
+        request_hash: str,
+    ) -> CareerTask:
+        with self._lock, self._connection() as connection:
+            existing_id = self._idempotent_resource(
+                connection,
+                operation="create_task",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if existing_id:
+                row = connection.execute(
+                    "SELECT payload FROM career_tasks WHERE task_id = ?",
+                    (existing_id,),
+                ).fetchone()
+                if not row:
+                    raise WorkspaceConflictError("idempotent task no longer exists")
+                return self._task_from_row(row)
+            connection.execute(
+                """
+                INSERT INTO career_tasks(
+                    task_id, workspace_id, status, career_intent, track_id,
+                    job_id, job_version_id, payload, created_at, updated_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task.task_id,
+                    LOCAL_WORKSPACE_ID,
+                    task.status.value,
+                    task.career_intent.value,
+                    task.track_id,
+                    task.job_id,
+                    task.job_version_id,
+                    _payload(task),
+                    task.created_at.isoformat(),
+                    task.updated_at.isoformat(),
+                    task.revision,
+                ),
+            )
+            self._remember_idempotency(
+                connection,
+                operation="create_task",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                resource_id=task.task_id,
+                created_at=task.created_at.isoformat(),
+            )
+        return task
+
+    def replace_task(self, task: CareerTask, *, expected_revision: int) -> CareerTask:
+        if task.revision != expected_revision + 1:
+            raise ValueError("replacement revision must increment by one")
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE career_tasks SET status = ?, career_intent = ?, track_id = ?,
+                    job_id = ?, job_version_id = ?, payload = ?, updated_at = ?, revision = ?
+                WHERE task_id = ? AND workspace_id = ? AND revision = ?
+                """,
+                (
+                    task.status.value,
+                    task.career_intent.value,
+                    task.track_id,
+                    task.job_id,
+                    task.job_version_id,
+                    _payload(task),
+                    task.updated_at.isoformat(),
+                    task.revision,
+                    task.task_id,
+                    LOCAL_WORKSPACE_ID,
+                    expected_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                exists = connection.execute(
+                    "SELECT 1 FROM career_tasks WHERE task_id = ?",
+                    (task.task_id,),
+                ).fetchone()
+                if not exists:
+                    raise WorkspaceNotFoundError(task.task_id)
+                raise WorkspaceConflictError("task was updated by another request")
+        return task
+
+    def task_deletion_impact(self, task_id: str) -> Dict[str, int]:
+        task = self.get_task(task_id)
+        if task is None:
+            raise WorkspaceNotFoundError(task_id)
+        material_ids = set(task.personal_material_ids)
+        if task.resume_material_id:
+            material_ids.add(task.resume_material_id)
+        material_ids.update(
+            source.reference_id
+            for source in [*task.last_analysis_sources, *task.saved_analysis_sources]
+            if source.kind.value == "personal_material"
+        )
+        return {
+            "tasks": 1,
+            "saved_analyses": int(task.saved_analysis_text is not None),
+            "track_references": int(task.track_id is not None),
+            "reviewed_job_references": int(task.job_id is not None),
+            "personal_material_references": len(material_ids),
+            "tracks_deleted": 0,
+            "action_references": len(self.list_actions_for_task(task_id)),
+            "actions_deleted": 0,
+            "personal_materials_deleted": 0,
+            "reviewed_jobs_deleted": 0,
+        }
+
+    def delete_task(self, task_id: str, *, expected_revision: int) -> Dict[str, int]:
+        impact = self.task_deletion_impact(task_id)
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM career_tasks
+                WHERE task_id = ? AND workspace_id = ? AND revision = ?
+                """,
+                (task_id, LOCAL_WORKSPACE_ID, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                exists = connection.execute(
+                    "SELECT 1 FROM career_tasks WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                if not exists:
+                    raise WorkspaceNotFoundError(task_id)
+                raise WorkspaceConflictError("task was updated by another request")
+            connection.execute("DELETE FROM idempotency_keys WHERE resource_id = ?", (task_id,))
+        self._checkpoint()
+        return impact
+
+    def count_tasks_referencing_material(self, material_id: str) -> int:
+        return sum(
+            material_id in task.personal_material_ids
+            or material_id == task.resume_material_id
+            or any(
+                source.kind.value == "personal_material" and source.reference_id == material_id
+                for source in [*task.last_analysis_sources, *task.saved_analysis_sources]
+            )
+            for task in self.list_tasks(limit=None)
+        )
+
+    def list_actions_for_task(self, task_id: str) -> List[ActionItem]:
+        return [
+            action
+            for action in self.list_actions(limit=None)
+            if action.task_id == task_id
+        ]
 
     def replace_action(self, action: ActionItem, *, expected_revision: int) -> ActionItem:
         allowed = {
@@ -608,12 +882,17 @@ class CareerWorkspaceRegistry:
         with self._connection() as connection:
             tracks = int(connection.execute("SELECT COUNT(*) FROM job_tracks").fetchone()[0])
             actions = int(connection.execute("SELECT COUNT(*) FROM action_items").fetchone()[0])
-        return {"tracks": tracks, "actions": actions}
+            tasks = int(connection.execute("SELECT COUNT(*) FROM career_tasks").fetchone()[0])
+        impact = {"tracks": tracks, "actions": actions}
+        if tasks:
+            impact["tasks"] = tasks
+        return impact
 
     def clear(self) -> Dict[str, int]:
         impact = self.deletion_impact()
         with self._lock, self._connection() as connection:
             connection.execute("DELETE FROM action_items")
+            connection.execute("DELETE FROM career_tasks")
             connection.execute("DELETE FROM job_tracks")
             connection.execute("DELETE FROM idempotency_keys")
         self._checkpoint(vacuum=True)
@@ -625,6 +904,7 @@ class CareerWorkspaceRegistry:
             "workspace_id": LOCAL_WORKSPACE_ID,
             "tracks": [item.model_dump(mode="json") for item in self.list_tracks(limit=None)],
             "actions": [item.model_dump(mode="json") for item in self.list_actions(limit=None)],
+            "tasks": [item.model_dump(mode="json") for item in self.list_tasks(limit=None)],
         }
 
     def integrity_report(self) -> Dict[str, Any]:
