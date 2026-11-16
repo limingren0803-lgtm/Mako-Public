@@ -4,6 +4,7 @@ import os
 import secrets
 import unicodedata
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import Header, HTTPException
 
@@ -25,11 +26,24 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def cors_origins() -> list[str]:
-    """返回允许跨域访问 API 的显式来源列表。"""
+    """返回允许跨域访问 API 的显式来源列表。
+
+    校验每个 origin 的协议必须是 http 或 https，防止
+    MAKO_CORS_ALLOW_ORIGINS 中混入 file://、data:// 等危险协议。
+    """
     raw = os.getenv("MAKO_CORS_ALLOW_ORIGINS", "").strip()
     if not raw:
         return list(DEFAULT_CORS_ORIGINS)
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    result = []
+    for origin in raw.split(","):
+        origin = origin.strip()
+        if not origin:
+            continue
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        result.append(origin)
+    return result or list(DEFAULT_CORS_ORIGINS)
 
 
 def validate_identifier(value: str, field_name: str) -> str:
