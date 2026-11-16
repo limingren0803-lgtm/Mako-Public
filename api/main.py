@@ -527,7 +527,15 @@ class ChatResponse(BaseModel):
 # ponytail: This five-minute cache assumes one API process. Move it to Redis
 # before running multiple workers or hosts.
 _chat_requests: Dict[str, tuple[str, asyncio.Task]] = {}
+_chat_requests_lock = asyncio.Lock()
 
+
+
+def _chat_requests_scan() -> None:
+    """Best-effort cleanup of finished chat requests that slipped past call_later."""
+    stale = [k for k, (_, t) in _chat_requests.items() if t.done()]
+    for k in stale:
+        _chat_requests.pop(k, None)
 
 def _expire_chat_request(key: str, task: asyncio.Task) -> None:
     current = _chat_requests.get(key)
@@ -736,6 +744,7 @@ async def chat(req: ChatRequest, http_request: FastAPIRequest):
         task = _track_background_task(_run_chat(req, http_request), "idempotent-chat")
         _chat_requests[key] = (fingerprint, task)
         asyncio.get_running_loop().call_later(300, _expire_chat_request, key, task)
+        asyncio.get_running_loop().call_later(60, _chat_requests_scan)
 
     try:
         return await asyncio.shield(task)
