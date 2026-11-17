@@ -81,6 +81,7 @@ class EvidenceRegistry:
             connection.executescript(
                 """
                 PRAGMA journal_mode = WAL;
+                PRAGMA busy_timeout = 5000;
                 CREATE TABLE IF NOT EXISTS evidence_records (
                     evidence_id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
