@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v2.9.0-4D74A8" alt="Mako v2.9.0">
+  <img src="https://img.shields.io/badge/version-v2.10.0-4D74A8" alt="Mako v2.10.0">
   <img src="https://img.shields.io/badge/public_tests-150%2F150-2E8B57" alt="公开回归测试 150/150">
   <img src="https://img.shields.io/badge/Docker_services-5-2496ED" alt="5 个 Docker 服务">
 </p>
@@ -141,20 +141,20 @@ Mako 给出建议时，会同时说明使用了哪些材料、哪些结论已有
 
 ## 项目当前进展
 
-当前稳定版本为 v2.9.0。以下数据来自本次公开候选与已发布功能的可验证状态。
+当前版本为 v2.10.0。以下数据来自本次公开候选与已发布功能的可验证状态。
 
 | 项目 | 当前状态 |
 |---|---:|
 | 求职任务 | 6 项 |
 | 企业官方来源 | 109 个 |
 | 已审核结构化职位样本 | 35 个 |
-| 当前版本 | v2.9.0 |
+| 当前版本 | v2.10.0 |
 | 公开回归测试 | 150/150 通过 |
 | Docker 服务 | 5 个 |
 
 ## 本次更新
 
-首次使用可先做简短诊断，再按需保存为任务；简历保留由用户勾选。简历优化集中展示修改稿并支持一键复制，修改说明单独呈现。上传超限与职位重复导入的审核状态已修复，监控告警增加去重、恢复与保留上限。详见[更新说明](docs/releases/notes/2026-11-17-maintenance.md)。
+首次使用可先做简短诊断，再按需保存为任务；简历保留由用户勾选。简历优化集中展示修改稿并支持一键复制，修改说明单独呈现。上传超限与职位重复导入的审核状态已修复，监控告警增加去重、恢复与保留上限。详见 [v2.10.0 发布说明](docs/releases/notes/v2.10.0.md)。模型改写仍需核对原材料，本版不保证消除未经确认的事实扩写。
 
 ## 快速启动
 
@@ -355,6 +355,7 @@ ui/           求职工作台、交互脚本和品牌图标
 
 - [Mako Career Skill 使用指南](docs/guides/mako-career-skill.md)
 - [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)
+- [Mako v2.10.0 发布说明](docs/releases/notes/v2.10.0.md)
 - [Mako v2.9.0 发布说明](docs/releases/notes/v2.9.0.md)
 - [Mako v2.4.0 发布说明](docs/releases/notes/v2.4.0.md)
 - [Mako v2.3.0 发布说明](docs/releases/notes/v2.3.0.md)

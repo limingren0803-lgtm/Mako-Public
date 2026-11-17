@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 BANNER = r"""
     ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ       ฅ^•ﻌ•^ฅ  
    ╔════════════════════════════════════╗
-   ║           Mako  v2.9.0             ║
+   ║           Mako  v2.10.0            ║
    ║     AI Multi-Agent 求职辅助系统     ║
    ║           求职助手已启动            ║
    ╚════════════════════════════════════╝
@@ -357,7 +357,7 @@ _swagger_enabled = env_bool("ENABLE_SWAGGER_UI", default=False)
 
 app = FastAPI(
     title="Mako — AI Career Intelligence System",
-    version="2.9.0",
+    version="2.10.0",
     lifespan=lifespan,
     docs_url="/docs" if _swagger_enabled else None,
     redoc_url="/redoc" if _swagger_enabled else None,
