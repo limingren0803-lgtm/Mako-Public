@@ -79,6 +79,7 @@ class Request:
     intent:      Optional[IntentCategory] = None
     time_sensitivity: Optional[TimeSensitivity] = None
     request_id:  str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    first_diagnosis: bool = False  # Set by the validated workspace route, never inferred from material text.
 
 
 @dataclass
@@ -201,6 +202,9 @@ class BaseAgent:
     def _build_system_prompt(self, req: Request) -> str:
         """把动态加载的 Skills 拼入 system prompt，让业务规则随请求生效。"""
         base_prompt = f"{self.system_prompt}\n\n[外部资料边界]\n{EXTERNAL_CONTEXT_POLICY}"
+        if req.first_diagnosis and req.intent == IntentCategory.CAREER_PROFILE:
+            from core.first_diagnosis import CONTRACT
+            base_prompt += "\n\n" + CONTRACT
         if self._skill_manager is None:
             return base_prompt
         intent = req.intent.value if req.intent else None
@@ -335,11 +339,6 @@ class AgentOrchestrator:
             req.intent  = intent_result.intent
             req.time_sensitivity = intent_result.time_sensitivity
 
-        # 复杂职业任务可结合多个能力模块处理，例如先分析岗位 JD，再结合职业画像进行岗位匹配。
-        collaboration = self._collaboration_targets(req)
-        if len(collaboration) > 1:
-            return await self.run_parallel(req, collaboration)
-
         # 2. 路由：选择 Agent 类型
         agent_type = self._route(req.intent)
 
@@ -363,10 +362,12 @@ class AgentOrchestrator:
 
     async def run_parallel(self, req: Request, agent_types: List[AgentType]) -> OrchestratorResult:
         """
-        并行派发给多个 Agent，合并结果。
-        适用于需要多个能力模块协同处理的复杂任务，
-        例如先分析岗位 JD，再结合职业画像判断匹配度。
+        供内部调用方显式指定 Agent 类型并行执行，按输入顺序拼接成功结果。
+        常规 run() 不自动进入此接口；六类 Career Skill 共用一个 CareerAgent。
+        各分支独立读取同一请求，不实现前一步输出传给后一步的串行工作流。
         """
+        if not agent_types:
+            raise ValueError("at least one agent type is required")
         t0 = time.monotonic()
         tasks = [self._execute(req, at) for at in agent_types]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -410,25 +411,6 @@ class AgentOrchestrator:
                 return target
 
         return AgentType.GENERAL
-
-    def _collaboration_targets(self, req: Request) -> List[AgentType]:
-        """
-        判断是否需要多个 Agent 并行协作。
-
-        意图识别通常只返回一个主意图；这里用领域关键词补充检测复合问题，
-        例如“先分析目标岗位 JD，再结合职业画像判断匹配度”属于需要组合多个职业能力模块处理的复杂任务。
-        """
-        msg = req.message.lower()
-        targets: List[AgentType] = []
-
-        technical_kws = ["崩溃", "报错", "error", "crash", "无法登录", "登录失败", "500", "401"]
-
-        if req.intent == IntentCategory.TECHNICAL or any(kw in msg for kw in technical_kws):
-            targets.append(AgentType.TECHNICAL)
-
-        # 保持顺序去重，并只返回当前有实例的 Agent 类型。
-        deduped = list(dict.fromkeys(targets))
-        return [agent_type for agent_type in deduped if self._pool.get(agent_type)]
 
     def _best_agent(self, agent_type: AgentType) -> Optional[BaseAgent]:
         """

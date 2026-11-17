@@ -67,8 +67,10 @@
   };
   const summarize = () => {
     const resume = document.getElementById("analysis-resume-select");
+    const diagnosis = document.querySelector(".diagnosis-tool-context");
+    if (diagnosis) diagnosis.hidden = !resume.value.startsWith("library:");
     const mode = document.querySelector('input[name="personal-knowledge-mode"]:checked')?.value;
-    const label = {auto: "自动查找补充材料", selected: "只使用指定材料", off: "不使用材料库"}[mode] || "沿用任务材料";
+    const label = !document.getElementById("task-context-rail").hidden ? `补充材料：${document.getElementById("task-context-materials").textContent}` : {auto: "自动查找补充材料", selected: "只使用指定材料", off: "不使用材料库"}[mode] || "沿用任务材料";
     document.getElementById("reference-summary").textContent = `${resume.selectedOptions[0]?.textContent || "请选择简历"} · ${label}`;
     const job = document.getElementById("job-select");
     document.getElementById("job-options-summary").textContent = document.querySelector('input[name="match-source"]:checked')?.value === "manual" ? "自行提供 JD · 展开编辑职位描述" : job.value ? job.selectedOptions[0].textContent : "常规方向分析 · 可展开选择具体岗位与信息范围";
@@ -97,9 +99,9 @@
   reduce.addEventListener("change", stopMotion);
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopMotion(); });
   new MutationObserver(() => { if (page.hidden) stopMotion(); }).observe(page, {attributes: true, attributeFilter: ["hidden"]});
-  if (!CSS.supports("animation-timeline: scroll(root block)")) {
-    const progress = () => { const range = document.documentElement.scrollHeight - innerHeight; page.querySelector(".tool-scroll-progress span").style.transform = `scaleX(${range > 0 ? scrollY / range : 0})`; };
-    addEventListener("scroll", progress, {passive: true}); addEventListener("resize", progress); progress();
+  if (!CSS.supports("animation-timeline: scroll(nearest block)")) {
+    const progress = () => { const scroller = page.closest("dialog") || document.scrollingElement; const range = scroller.scrollHeight - scroller.clientHeight; page.querySelector(".tool-scroll-progress span").style.transform = `scaleX(${range > 0 ? Math.max(0, Math.min(1, scroller.scrollTop / range)) : 0})`; };
+    document.addEventListener("scroll", progress, {passive: true, capture: true}); addEventListener("resize", progress); progress();
   }
   window.MakoToolPage = Object.freeze({activate, summarize});
 })();

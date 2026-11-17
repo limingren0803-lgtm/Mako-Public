@@ -124,6 +124,17 @@
       return;
     }
     const task = item.task;
+    if (task.initial_diagnosis) {
+      const brief = task.initial_diagnosis;
+      const focus = text("section", "", "diagnosis-task-next");
+      focus.append(text("p", "初步判断已保存", "eyebrow"), text("h3", brief.priority), text("p", brief.next_step));
+      const reasons = text("ul"); brief.reasons.forEach(reason => reasons.append(text("li", reason))); focus.append(reasons);
+      if (task.status === "active" && intentLabels[brief.next_intent]) {
+        const nextTool = actionButton(`进入${intentLabels[brief.next_intent]} →`, "advance", "primary");
+        nextTool.dataset.intent = brief.next_intent; focus.append(nextTool);
+      }
+      detail.append(focus);
+    }
     const heading = document.createElement("div");
     heading.className = "task-detail-heading";
     const title = document.createElement("div");
@@ -168,10 +179,10 @@
     if (task.status === "active") stageHeading.append(actionButton("继续当前阶段", "continue", "primary"));
     const saved = document.createElement("details");
     saved.className = "task-saved-result";
-    saved.open = true;
+    saved.open = !task.initial_diagnosis;
     saved.append(text("summary", task.saved_analysis_text ? `查看已保存的分析${intentLabels[task.saved_analysis_intent] ? ` · ${intentLabels[task.saved_analysis_intent]}` : ""}` : "本阶段的结果如何保留"));
     const savedContent = text("div");
-    window.MakoView.renderResult(savedContent, task.saved_analysis_text || "还没有保存结果。分析完成后由你决定是否保留。", task.saved_analysis_intent === "career_planning");
+    window.MakoView.renderResult(savedContent, task.saved_analysis_text || "还没有保存结果。分析完成后由你决定是否保留。", task.saved_analysis_intent === "career_planning", task.saved_analysis_intent === "career_resume");
     saved.append(savedContent);
     stage.append(stageHeading, saved);
 
@@ -356,6 +367,7 @@
     window.MakoApp.openTask(item);
     state.current = item;
     window.MakoApp.restoreRetained();
+    if (item.task.initial_diagnosis) window.MakoFirstVisit?.wrapTool(item);
     window.MakoContinuity?.navigate();
   };
 
@@ -561,6 +573,14 @@
     openInSkill(item);
   });
   window.MakoTasks = Object.freeze({busy: () => busy, analysis: () => state.analysis, restoreAnalysis, continueWith: intent => updateIntent(state.current, intent), refresh: refreshCurrent, load, loadOverview, captureAnalysis, current: () => state.current, openCreate: preset => openDialog(preset),
+    acceptDiagnosis: async (item, intent = null) => {
+      state.selectedId = item.task.task_id;
+      document.getElementById("task-status-filter").value = "active";
+      await window.MakoWorkspace.showPage("tasks");
+      const current = await refreshCurrent(item.task.task_id);
+      state.current = current;
+      if (intent) await updateIntent(current, intent);
+    },
     selected: () => state.selectedId,
     resume: async (id, skill) => {
       const item = await refreshCurrent(id);

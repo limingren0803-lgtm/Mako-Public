@@ -465,7 +465,7 @@
 .dialog-heading { margin-bottom: 18px; }
 .dialog-close { padding: 0 5px; color: var(--muted); background: transparent; border: 0; font-size: 25px; line-height: 1; }
 .dialog-fields { display: grid; gap: 2px; margin: 14px 0; }
-.workspace-dialog input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]),
+.workspace-dialog input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]):not([type="file"]),
 .workspace-dialog select,
 .workspace-dialog textarea {
   width: 100%;
@@ -1107,7 +1107,7 @@ button, .primary, .secondary, .mini-button, .action-check,
 .result-actions .secondary, .material-pager .secondary, .track-header-actions .secondary { min-height: 44px; }
 select, .workspace-dialog select,
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]),
-.workspace-dialog input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]) { min-height: 44px; }
+.workspace-dialog input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]):not([type="file"]) { min-height: 44px; }
 .action-check, .dialog-close { min-width: 44px; }
 summary { min-height: 44px; align-content: center; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -1700,10 +1700,17 @@ body:has(dialog[open]) .guide-launcher { visibility: hidden; }
 #skill-workspace-view .intro h1 { font-size: 30px; margin: 0 0 8px; }
 #skill-workspace-view .intro #skill-code { display: none; }
 #skill-workspace-view .intro #skill-description { font-size: 14px; max-width: 740px; }
-.tool-scroll-progress { position: fixed; top: 76px; left: 0; right: 0; height: 3px; z-index: 11; background: #dce6f4; pointer-events: none; }
+.tool-scroll-progress { position: sticky; top: var(--tool-sticky-top); height: 3px; margin-bottom: 12px; z-index: 4; background: #dce6f4; pointer-events: none; }
 .tool-scroll-progress span { display: block; width: 100%; height: 100%; background: #406da4; transform: scaleX(0); transform-origin: left; }
-@supports (animation-timeline: scroll(root block)) {
-  .tool-scroll-progress span { animation: tool-scroll-fill linear both; animation-timeline: scroll(root block); }
+.resume-copy-card { padding: 20px; background: #f8fafd; border: 1px solid #cadbf0; border-radius: 12px; }
+.resume-copy-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.resume-copy-heading h4 { margin: 0; }
+.resume-copy-heading button { min-height: 44px; }
+.resume-copy-body { padding-top: 12px; border-top: 1px solid #dbe5f0; }
+.resume-edit-notes { margin-top: 20px; }
+.resume-edit-notes > summary { min-height: 44px; cursor: pointer; color: #40618a; }
+@supports (animation-timeline: scroll(nearest block)) {
+  .tool-scroll-progress span { animation: tool-scroll-fill linear both; animation-timeline: scroll(nearest block); }
 }
 @keyframes tool-scroll-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .tool-reveal-pending { opacity: 0; transform: translateY(24px); }

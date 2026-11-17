@@ -94,10 +94,29 @@
     return sections;
   };
   let resultRenderId = 0;
-  const renderResult = (target, source, planning = false) => {
+  const renderResult = (target, source, planning = false, resume = false) => {
     target.dataset.rawText = source || "";
     const sections = resultSections(source);
-    if (sections) {
+    const drafts = sections?.filter(section => section.title === "修改后的简历") || [];
+    if (resume && drafts.length === 1 && drafts[0].body.trim()) {
+      target.replaceChildren(); target.classList.add("markdown");
+      const draft = drafts[0], card = node("section", "", "resume-copy-card");
+      const heading = node("div", "", "resume-copy-heading");
+      const copy = node("button", "复制修改稿", "secondary"); copy.type = "button";
+      heading.append(node("h4", "修改后的简历"), copy);
+      const body = node("div", "", "resume-copy-body"); markdown(body, draft.body);
+      const status = node("p", "仅复制下方正文，不包含修改说明。", "hint"); status.setAttribute("role", "status");
+      copy.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(body.innerText.trim()); status.textContent = "修改稿已复制，可以粘贴到简历中。"; }
+        catch (_) { status.textContent = "浏览器未允许复制，请选中下方正文后手动复制。"; }
+      });
+      card.append(heading, status, body); target.append(card);
+      const notes = sections.filter(section => section !== draft);
+      if (notes.length) {
+        const details = node("details", "", "resume-edit-notes"); details.append(node("summary", "修改说明与待确认（请核对后使用）"));
+        const content = node("div"); markdown(content, notes.map(section => `## ${section.title}\n\n${section.body}`).join("\n\n")); details.append(content); target.append(details);
+      }
+    } else if (sections) {
       target.replaceChildren(); target.classList.add("markdown");
       const outline = node("nav", "", "result-outline"); outline.setAttribute("aria-label", "本次分析目录");
       outline.append(node("span", "本次分析", "result-outline-label"));
@@ -172,7 +191,7 @@
     if (![payload?.conclusion, payload?.response].some(value => typeof value === "string" && value.trim()) || (payload?.response_complete === false && Array.isArray(payload.quality_flags) && payload.quality_flags.includes("empty_response"))) return "empty";
     return payload.response_complete === false ? "partial" : "complete";
   };
-  const renderAnalysis = (target, payload, planning = false) => {
+  const renderAnalysis = (target, payload, planning = false, resume = false) => {
     if (analysisState(payload) === "empty") { target.replaceChildren(); delete target.dataset.rawText; return; }
     const original = typeof payload.response === "string" && payload.response.trim() ? payload.response : "";
     const distinctConclusion = typeof payload.conclusion === "string" && payload.conclusion.trim() && payload.conclusion.trim() !== original.trim();
@@ -182,8 +201,7 @@
     const heading = document.querySelector("#conclusions-panel .result-column-heading");
     if (tab) tab.textContent = label;
     if (heading) heading.textContent = label;
-    renderResult(target, conclusion, planning && !distinctConclusion);
-    if (!distinctConclusion && original) target.prepend(node("p", "这次没有单独生成简短结论；以下是完整分析，请核对依据后使用。", "task-reference-warning"));
+    renderResult(target, conclusion, planning && !distinctConclusion, resume && !distinctConclusion && analysisState(payload) === "complete");
     if (analysisState(payload) === "partial") target.prepend(node("p", "回答未完成。下面只保留了已返回的内容，不能当作完整结论；核对后可以保留或重新分析。", "task-reference-warning"));
     for (const [field, title] of [["gaps", "仍需补齐"], ["recommendations", "建议下一步"]]) {
       if (!Array.isArray(payload[field]) || !payload[field].length) continue;
@@ -195,7 +213,7 @@
     if (original && conclusion !== original) {
       const full = node("div");
       if (resultSections(original)) {
-        target.append(node("h3", "完整分析正文")); renderResult(full, original, planning); target.append(full);
+        target.append(node("h3", "完整分析正文")); renderResult(full, original, planning, resume && analysisState(payload) === "complete"); target.append(full);
       } else {
         const details = node("details"); details.append(node("summary", "查看完整分析正文"));
         markdown(full, original); details.append(full); target.append(details);
@@ -209,6 +227,7 @@
     if (resume) {
       const section = node("section", "", "material-usage");
       section.append(node("h3", "本次简历"));
+      if (resume.task_history_excluded) section.append(node("p", "本次未沿用旧简历的初步判断和对话记录，也未写入原任务对话。", "hint"));
       if (resume.source === "none") section.append(node("p", "本次未使用简历。"));
       else if (resume.source === "legacy") section.append(node("p", "本次未单独指定简历，个人材料仍按原有检索规则参与。"));
       else {

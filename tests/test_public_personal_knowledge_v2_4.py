@@ -105,6 +105,25 @@ class PublicPersonalKnowledgeTests(unittest.TestCase):
         self.local_patch.stop()
         self.temp.cleanup()
 
+    def test_excess_sections_return_clear_error_without_saving(self):
+        import json
+        self.assertEqual(self.client.post("/v2/workspace/session").status_code, 204)
+        for endpoint in ("materials/preview", "materials", "analyze/files"):
+            with self.subTest(endpoint=endpoint):
+                response = self.client.post(
+                    "/v2/workspace/" + endpoint,
+                    files={"files" if endpoint == "analyze/files" else "file":
+                           ("many.txt", b"a\n\n" * 100001, "text/plain")},
+                    data={"title": "example", "category": "note", "payload": json.dumps({
+                        "message": "check", "career_intent": "career_resume", "resume_source": "none",
+                    })},
+                )
+                self.assertEqual(response.status_code, 413)
+                self.assertEqual(response.json()["error"]["code"], "payload_too_large")
+                self.assertIn("100000", response.json()["error"]["message"])
+                self.assertEqual(self.registry.list_materials(), [])
+                self.assertEqual(self.index.rows, {})
+
     def test_supported_formats_have_traceable_locations(self):
         txt = parse_material("resume.txt", "教育经历\n项目经历".encode())
         markdown = parse_material("project.md", "# 项目\n\n完成分析".encode())

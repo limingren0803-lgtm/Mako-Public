@@ -216,7 +216,7 @@
     const restoredPayload = {response: saved.response, response_complete: saved.responseComplete};
     const restoredState = window.MakoView.analysisState(restoredPayload);
     if (saved.response && restoredState !== "empty") {
-      window.MakoView.renderAnalysis(result, restoredPayload, activeSkill === "career_planning");
+      window.MakoView.renderAnalysis(result, restoredPayload, activeSkill === "career_planning", activeSkill === "career_resume");
       markResultReady(restoredState);
       const task = window.MakoTasks.current()?.task;
       if (activeTask && task?.last_analysis_request_id === saved.requestId && task.last_analysis_status === "completed") {
@@ -314,13 +314,14 @@
     else if (value === "none") resumeStatus.textContent = activeTask && !activeTask.task.resume_material_id ? "此任务尚未固定简历，本次不使用库内简历。若要沿用旧版，请先在任务中明确选定。" : "本次不使用简历；经历、项目等补充材料仍按上方设置处理。";
     else if (value.startsWith("temporary:")) resumeStatus.textContent = "这份附件仅用于本次分析，不会替换材料库中的当前简历。";
     else resumeStatus.textContent = activeTask ? "沿用当前任务选定的简历；若要更换库内版本，请先调整任务上下文。" : "本次使用所选库内简历，不会改变材料库中的当前简历。";
+    if (activeTask && (value === "none" || value.startsWith("temporary:"))) resumeStatus.textContent += " 本次不沿用旧简历的初步判断和对话记录，也不写入原任务对话；结果仍可自行保存到任务。";
   };
 
   const renderResumeChoice = ({reset = false, resetFile = false} = {}) => {
     if (reset) resumeChoiceExplicit = false;
     const old = resumeSelect.value;
     const oldFile = resetFile ? "" : resumeFileSelect.value;
-    const resumes = window.MakoMaterials?.availableResumes() || [];
+    const resumes = activeTask ? [activeTask.references.resume?.material].filter(item => item?.status === "active" && item.index_status === "ready") : window.MakoMaterials?.availableResumes() || [];
     const mode = activeTask?.task.personal_knowledge_mode || document.querySelector('input[name="personal-knowledge-mode"]:checked')?.value || "auto";
     const pinned = activeTask?.task.resume_material_id || null;
     const current = activeTask ? resumes.find(item => item.material_id === pinned) : window.MakoMaterials?.currentResume();
@@ -332,13 +333,14 @@
     document.getElementById("analysis-resume-file-label").hidden = !attachments.length;
     resumeFileSelect.hidden = !attachments.length;
     if (attachments.length) resumeSelect.appendChild(new Option("请选择本次使用的简历", ""));
-    if (mode !== "off") {
+    if (activeTask || mode !== "off") {
       const choices = activeTask ? resumes.filter(item => item.material_id === pinned) : resumes;
       choices.forEach(item => resumeSelect.appendChild(new Option(`${item.title}${item.material_id === current?.material_id ? " · 当前选用" : ""}（材料库）`, `library:${item.material_id}`)));
     }
     if (attachments.includes(resumeFileSelect.value)) resumeSelect.appendChild(new Option(`${resumeFileSelect.value}（仅本次附件）`, `temporary:${resumeFileSelect.value}`));
     resumeSelect.appendChild(new Option("本次不使用简历", "none"));
-    const preferred = mode !== "off" && current ? `library:${current.material_id}` : "none";
+    if (activeTask && pinned && !current) resumeSelect.prepend(new Option("任务简历不可用，请核对或明确不使用", ""));
+    const preferred = (activeTask || mode !== "off") && current ? `library:${current.material_id}` : activeTask && pinned ? "" : "none";
     resumeSelect.value = !reset && [...resumeSelect.options].some(option => option.value === old) ? old : attachments.length ? "" : preferred;
     const structuredMatch = activeSkill === "career_match" && !activeTask && matchSource() === "verified" && Boolean(selectedJob());
     document.getElementById("analysis-resume-choice").hidden = structuredMatch;
@@ -357,7 +359,7 @@
     if (value === "none") return {resume_source: "none", ...(markedFile ? {temporary_resume_filename: markedFile} : {})};
     if (value.startsWith("library:")) {
       const materialId = value.slice(8);
-      if (!window.MakoMaterials.availableResumes().some(item => item.material_id === materialId)) throw new Error("所选简历当前不可用，请重新选择。");
+      if (activeTask ? activeTask.references.resume?.material?.material_id !== materialId : !window.MakoMaterials.availableResumes().some(item => item.material_id === materialId)) throw new Error("所选简历当前不可用，请重新选择。");
       if (activeTask && activeTask.task.resume_material_id !== materialId) throw new Error("当前任务的简历已变化，请返回任务调整后重试。");
       return {resume_source: "library", resume_material_id: materialId, ...(markedFile ? {temporary_resume_filename: markedFile} : {})};
     }
@@ -499,6 +501,14 @@
   };
 
   window.MakoApp = Object.freeze({openTask, canSwitch, portableDrafts, restoreRetained: restoreRetainedDraft,
+    acceptTemporaryResume: async file => {
+      await readFile([file]);
+      const item = temporaryFiles.find(value => value.file === file && value.preview);
+      if (!item) throw new Error("临时简历未能带入，请在工具中重新选择");
+      resumeFileSelect.value = file.name; renderResumeChoice({resetFile: false});
+      resumeSelect.value = `temporary:${file.name}`; resumeChoiceExplicit = true; updateResumeStatus();
+      resumeSelect.dispatchEvent(new Event("change", {bubbles: true}));
+    },
     position: () => ({skill: activeSkill, taskId: activeTask?.task.task_id || null}),
     resumeIndependent: skill => { openIndependent(skill); window.MakoWorkspace.showSkill(); },
     retain: items => items.forEach(item => retainedDrafts.set(`${item.taskId}:${item.skill}`, item)),
@@ -960,6 +970,7 @@
   document.addEventListener("DOMContentLoaded", async () => { await window.MakoMaterials.load({quiet: true}); renderResumeChoice(); });
 
   submit.addEventListener("click", async () => {
+    if (window.MakoFirstVisit?.busy()) { document.getElementById("draft-status").textContent = "初步诊断仍在进行，请先从右下角查看进度。"; return; }
     if (submit.disabled || preparingFiles || window.MakoTasks?.busy()) return;
     setSubmitStatus();
     const currentTask = activeTask ? window.MakoTasks.current() || activeTask : null;
@@ -1139,7 +1150,7 @@
       }
       conversationId = payload.conv_id;
       result.replaceChildren();
-      window.MakoView.renderAnalysis(result, payload, activeSkill === "career_planning");
+      window.MakoView.renderAnalysis(result, payload, activeSkill === "career_planning", activeSkill === "career_resume");
       const meta = document.createElement("div");
       meta.className = "result-meta";
       meta.textContent = `处理板块：${skill.title} · 请求编号：${payload.request_id}${payload.conversation_persisted === false ? " · 临时分析，未写入对话记忆" : ""}`;

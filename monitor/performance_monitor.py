@@ -110,6 +110,8 @@ class PerformanceMonitor:
     这就是"利用 Monitor 监控在线表现"的闭环。
     """
 
+    MAX_ALERTS = 1000
+
     # 告警阈值
     THRESHOLDS = {
         "agent_success_rate":  (0.90, Severity.ERROR,   "less_than"),
@@ -132,7 +134,7 @@ class PerformanceMonitor:
         self._webhook      = webhook_url
         self._detector     = AnomalyDetector()
 
-        self._alerts:      List[Alert]      = []
+        self._alerts: Deque[Alert] = deque(maxlen=self.MAX_ALERTS)
         self._suggestions: List[Suggestion] = []
         self._active       = False
         self._task:        Optional[asyncio.Task] = None
@@ -293,11 +295,23 @@ class PerformanceMonitor:
         threshold, severity, operator = self.THRESHOLDS[metric]
         triggered = (operator == "less_than" and value < threshold) or \
                     (operator == "greater_than" and value > threshold)
+        key = f"{metric}:{label}"
+        # ponytail: At most 1000 retained episodes; oldest entries (even active ones)
+        # are evicted. Use a persistent alert store if full historical retention is needed.
+        active = next((a for a in reversed(self._alerts) if a.metric == key and not a.resolved), None)
+        message = f"{label} 的 {metric} = {value:.3f}，阈值 {threshold}"
+        if active:
+            active.value = value
+            active.message = message
+            if not triggered:
+                active.resolved = True
+                logger.info("告警恢复 [%s] value=%.3f", key, value)
+            return
         if triggered:
             alert = Alert(
                 severity=severity,
-                metric=f"{metric}:{label}",
-                message=f"{label} 的 {metric} = {value:.3f}，阈值 {threshold}",
+                metric=key,
+                message=message,
                 value=value,
                 threshold=threshold,
             )
@@ -338,7 +352,7 @@ class PerformanceMonitor:
     async def _send_webhook(self, alert: Alert) -> None:
         try:
             async with httpx.AsyncClient(timeout=5.0) as c:
-                await c.post(self._webhook, json=asdict(alert))  # type: ignore
+                await c.post(self._webhook, json={**asdict(alert), "severity": alert.severity.value})
         except Exception as ex:
             logger.error(
                 "Webhook 发送失败: error_type=%s",

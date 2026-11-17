@@ -776,7 +776,9 @@ class KnowledgeRegistry:
                 changed = False
                 version_id = duplicate["job_version_id"]
                 version_number = duplicate["version_number"]
-                if duplicate["review_status"] == "approved":
+                if (duplicate["review_status"] == "approved"
+                        and duplicate["validation_status"] == "active"
+                        and version_id == current_version_id):
                     connection.execute(
                         """
                         UPDATE job_postings
@@ -794,7 +796,8 @@ class KnowledgeRegistry:
                             job_id,
                         ),
                     )
-                else:
+                elif (duplicate["review_status"] == "pending"
+                      and duplicate["validation_status"] == "staged"):
                     connection.execute(
                         """
                         UPDATE job_postings
@@ -802,6 +805,12 @@ class KnowledgeRegistry:
                         WHERE job_id = ?
                         """,
                         (version_id, fetched_at, expires_at, job_id),
+                    )
+                else:
+                    # Re-importing history is not a review decision or a rollback.
+                    connection.execute(
+                        "UPDATE job_postings SET last_seen_at = ? WHERE job_id = ?",
+                        (fetched_at, job_id),
                     )
             else:
                 version_number = connection.execute(
@@ -897,6 +906,8 @@ class KnowledgeRegistry:
                 if changed and review_status == "approved"
                 else "job_version_staged"
                 if changed
+                else "job_rejected_duplicate_seen"
+                if duplicate["review_status"] == "rejected"
                 else "job_seen_unchanged"
             ),
             "job_posting",
@@ -905,7 +916,7 @@ class KnowledgeRegistry:
             {
                 "job_version_id": version_id,
                 "source_id": posting.source_id,
-                "review_status": review_status,
+                "review_status": duplicate["review_status"] if duplicate else review_status,
             },
         )
         result = self.get_job_posting(job_id) or {}

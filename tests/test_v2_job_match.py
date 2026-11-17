@@ -100,6 +100,30 @@ class ApprovedJobVersionTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_rejected_duplicate_preserves_review_queue(self):
+        active = self.registry.upsert_job_posting(posting())
+        rejected_posting = posting(title="Rejected example")
+        rejected = self.registry.upsert_job_posting(rejected_posting, review_status="pending")
+        self.registry.review_job_version(job_id=active["job_id"],
+            version_id=rejected["submitted_version_id"], decision="rejected")
+        again = self.registry.upsert_job_posting(rejected_posting, review_status="pending")
+        self.assertFalse(again["changed"])
+        self.assertEqual(again["review_status"], "rejected")
+        self.assertIsNone(again["pending_version_id"])
+        self.assertEqual(self.registry.list_pending_job_versions(), [])
+        pending = self.registry.upsert_job_posting(posting(title="New example"), review_status="pending")
+        again = self.registry.upsert_job_posting(rejected_posting, review_status="pending")
+        self.assertEqual(again["pending_version_id"], pending["submitted_version_id"])
+        self.assertEqual([v["job_version_id"] for v in self.registry.list_pending_job_versions()],
+                         [pending["submitted_version_id"]])
+
+    def test_historical_approved_duplicate_keeps_current_title(self):
+        self.registry.upsert_job_posting(posting())
+        current = self.registry.upsert_job_posting(posting(title="Current example"))
+        again = self.registry.upsert_job_posting(posting(), review_status="pending")
+        self.assertEqual(again["current_version_id"], current["submitted_version_id"])
+        self.assertEqual(again["title"], current["title"])
+
     def test_current_approved_version_is_returned(self):
         result = self.registry.upsert_job_posting(posting(), review_status="approved")
         version_id = result["submitted_version_id"]

@@ -19,7 +19,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-v2.9.0-4D74A8" alt="Mako v2.9.0">
-  <img src="https://img.shields.io/badge/public_tests-144%2F144-2E8B57" alt="公开回归测试 144/144">
+  <img src="https://img.shields.io/badge/public_tests-150%2F150-2E8B57" alt="公开回归测试 150/150">
   <img src="https://img.shields.io/badge/Docker_services-5-2496ED" alt="5 个 Docker 服务">
 </p>
 
@@ -47,6 +47,8 @@ Mako 处理的不只是一份简历，而是求职过程中一连串相互关联
 <p><sub>Finn 是一只刚从校园游进职场的小鲨鱼，鳍尖还留着没褪干净的稚气，游动的时候还带着点不熟练的冲劲。面对陌生的岗位和选择，它也可能会感到茫然——但它的感官很灵，哪怕水浑光暗，也能捕捉到别人错过的一点点信号。它或许能陪着某一刻感到迷茫的你，一起游向那个真正适合自己的方向。</sub></p>
 
 ## 从背景梳理到行动计划
+
+可以先跟随[六阶段求职示例](docs/guides/career-workspace-example.md)：使用虚构简历和岗位，逐步核对输入、结果与下一步。
 
 <p align="center">
   <img src="docs/images/mako-career-flow.gif" alt="小 Finn 串联背景诊断、方向匹配、JD 分析、简历优化、面试准备和行动规划" width="360">
@@ -147,8 +149,12 @@ Mako 给出建议时，会同时说明使用了哪些材料、哪些结论已有
 | 企业官方来源 | 109 个 |
 | 已审核结构化职位样本 | 35 个 |
 | 当前版本 | v2.9.0 |
-| 公开回归测试 | 144/144 通过 |
+| 公开回归测试 | 150/150 通过 |
 | Docker 服务 | 5 个 |
+
+## 本次更新
+
+首次使用可先做简短诊断，再按需保存为任务；简历保留由用户勾选。简历优化集中展示修改稿并支持一键复制，修改说明单独呈现。上传超限与职位重复导入的审核状态已修复，监控告警增加去重、恢复与保留上限。详见[更新说明](docs/releases/notes/2026-11-17-maintenance.md)。
 
 ## 快速启动
 
@@ -177,6 +183,10 @@ docker compose down
 完整环境准备和部署步骤见 [Mako 从 0 到 1 部署指南](Mako_从0到1部署指南.md)。
 
 ## 工程实现
+
+当前部署支持单 API 进程、单应用实例，镜像固定 `--workers 1`。请求缓存和工作区会话不跨进程共享；多 worker 或多个副本可能重复执行同键请求。服务启动会提示可识别的不支持配置，完整边界见[部署与请求重试](docs/guides/deployment-boundaries.md)。
+
+常规求职请求按所选意图交由 CareerAgent 处理，不自动并行调用多个 Agent。`run_parallel()` 保留为内部显式接口，不代表六阶段自动串行执行。
 
 Mako 的产品流程由 Agent、Skills、记忆、知识检索、职位数据治理和可观测性共同支撑。
 

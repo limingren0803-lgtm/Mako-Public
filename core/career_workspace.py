@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from core.first_diagnosis import DiagnosisBrief
 
 
 def utc_now() -> datetime:
@@ -181,6 +182,7 @@ class CareerTask(BaseModel):
     saved_analysis_intent: Optional[CareerTaskIntent] = None
     saved_analysis_sources: List[CareerTaskSourceReference] = Field(default_factory=list, max_length=50)
     saved_analysis_at: Optional[datetime] = None
+    initial_diagnosis: Optional[DiagnosisBrief] = None
     archived_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

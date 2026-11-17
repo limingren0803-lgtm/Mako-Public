@@ -57,7 +57,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Request replay and workspace sessions are process-local: one worker, one app replica.
+CMD ["python", "-m", "uvicorn", "api.main:app", "--workers", "1", "--host", "0.0.0.0", "--port", "8000"]
 
 # ── 阶段 4：开发镜像 ──────────────────────────────────────────────────────────
 FROM dependencies AS development
@@ -69,4 +70,5 @@ RUN mkdir -p /app/data/chroma /app/data/knowledge /app/logs /app/config /app/tes
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Request replay and workspace sessions are process-local: one worker, one app replica.
+CMD ["python", "-m", "uvicorn", "api.main:app", "--workers", "1", "--host", "0.0.0.0", "--port", "8000", "--reload"]

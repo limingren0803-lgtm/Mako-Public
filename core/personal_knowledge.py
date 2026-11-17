@@ -10,6 +10,8 @@ from typing import Any, Dict, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+MAX_MATERIAL_SECTIONS = 100_000
+
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
@@ -98,7 +100,7 @@ class ExtractedMaterial(BaseModel):
     text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_size: int = Field(ge=1, le=10 * 1024 * 1024)
     character_count: int = Field(ge=1, le=1_000_000)
-    sections: List[ExtractedSection] = Field(min_length=1, max_length=100_000)
+    sections: List[ExtractedSection] = Field(min_length=1, max_length=MAX_MATERIAL_SECTIONS)
     warnings: List[str] = Field(default_factory=list, max_length=20)
 
     @property

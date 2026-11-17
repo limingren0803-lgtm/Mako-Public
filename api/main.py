@@ -154,11 +154,35 @@ def _anthropic_cfg() -> Dict[str, Any]:
     return cfg
 
 
+def _warn_worker_configuration() -> None:
+    """Best-effort check; process-local state cannot discover other replicas."""
+    workers = os.getenv("UVICORN_WORKERS") or os.getenv("WEB_CONCURRENCY") or "1"
+    args = sys.argv[1:]
+    for index, arg in enumerate(args):
+        if arg in {"--workers", "-w"} and index + 1 < len(args):
+            workers = args[index + 1]
+        elif arg.startswith("--workers="):
+            workers = arg.split("=", 1)[1]
+    try:
+        single_worker = int(workers) == 1
+    except ValueError:
+        single_worker = False
+    message = (
+        "Mako 仅支持单 API 进程、单应用实例；聊天与分析的五分钟幂等缓存及工作区会话不跨进程共享。"
+        "请使用 --workers 1，勿通过多个副本分担请求。"
+    )
+    if not single_worker:
+        logger.warning("检测到不受支持的 worker 配置。%s", message)
+    else:
+        logger.info(message)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _orchestrator, _memory, _tool_manager, _monitor, _evaluator, _skill_manager, _evidence_registry, _career_workspace_registry, _personal_knowledge_registry, _personal_knowledge_index
 
     print(BANNER, flush=True)
+    _warn_worker_configuration()
 
     from agents.agent_orchestrator import AgentOrchestrator, Request
     from core.intent_recognizer import IntentRecognizer
@@ -753,6 +777,7 @@ async def _run_chat(
     http_request: FastAPIRequest,
     *,
     additional_context: str = "",
+    first_diagnosis: bool = False,
 ):
     """
     主对话接口。完整流程：
@@ -832,6 +857,7 @@ async def _run_chat(
         intent=intent,
         time_sensitivity=time_sensitivity,
         request_id=_http_request_id(http_request),
+        first_diagnosis=first_diagnosis,
     )
 
     # 3. 执行
@@ -887,6 +913,7 @@ async def _run_personal_knowledge_analysis(
         ChatRequest.model_validate(payload),
         http_request,
         additional_context=personal_context,
+        first_diagnosis=payload.get("_first_diagnosis") is True,
     )
 
 

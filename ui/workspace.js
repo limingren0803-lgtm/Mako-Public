@@ -622,6 +622,7 @@
 
   const switchWorkspacePage = page => {
     if (window.MakoApp && !window.MakoApp.canSwitch()) return;
+    window.MakoFirstVisit?.leaveTool();
     workspaceView.hidden = false;
     skillView.hidden = true;
     document.querySelectorAll(".workspace-page").forEach(section => { section.hidden = section.dataset.page !== page; });

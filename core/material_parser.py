@@ -15,6 +15,7 @@ from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
 from core.personal_knowledge import (
+    MAX_MATERIAL_SECTIONS,
     ExtractedMaterial,
     ExtractedSection,
     LocatorType,
@@ -64,6 +65,19 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _append_section(
+    sections: list[ExtractedSection], *, locator_type: LocatorType,
+    locator_label: str, text: str,
+) -> None:
+    if len(sections) >= MAX_MATERIAL_SECTIONS:
+        raise MaterialTooLargeError(f"文件分段超过 {MAX_MATERIAL_SECTIONS} 个，请拆分文件后重试。")
+    if len(text) > MAX_TEXT_CHARACTERS:
+        raise MaterialTooLargeError("parsed text exceeds 1000000 characters")
+    sections.append(ExtractedSection(
+        ordinal=len(sections), locator_type=locator_type, locator_label=locator_label, text=text,
+    ))
+
+
 def _finalize(
     *, filename: str, file_type: MaterialFileType, content: bytes,
     sections: list[ExtractedSection], warnings: list[str] | None = None,
@@ -71,6 +85,8 @@ def _finalize(
     sections = [section for section in sections if section.text.strip()]
     if not sections:
         raise MaterialParseError("document contains no extractable text")
+    if len(sections) > MAX_MATERIAL_SECTIONS:
+        raise MaterialTooLargeError(f"文件分段超过 {MAX_MATERIAL_SECTIONS} 个，请拆分文件后重试。")
     normalized = "\n\n".join(section.text for section in sections)
     if len(normalized) > MAX_TEXT_CHARACTERS:
         raise MaterialTooLargeError("parsed text exceeds 1000000 characters")
@@ -93,7 +109,7 @@ def _parse_text(filename: str, content: bytes, *, markdown: bool) -> ExtractedMa
         text = content.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
         raise InvalidMaterialError("text files must use UTF-8") from exc
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = io.StringIO(text.replace("\r\n", "\n").replace("\r", "\n"))
     sections: list[ExtractedSection] = []
     start = 0
     buffer: list[str] = []
@@ -104,22 +120,25 @@ def _parse_text(filename: str, content: bytes, *, markdown: bool) -> ExtractedMa
         if clean:
             heading = buffer[0].lstrip().startswith("#") if markdown and buffer else False
             label = f"第 {start + 1}-{end} 行" if end > start + 1 else f"第 {start + 1} 行"
-            sections.append(ExtractedSection(
-                ordinal=len(sections),
+            _append_section(
+                sections,
                 locator_type=LocatorType.HEADING if heading else LocatorType.LINE,
                 locator_label=label,
                 text=clean,
-            ))
+            )
         buffer = []
 
-    for index, line in enumerate(lines):
+    line_count = 0
+    for line_count, line in enumerate(lines, start=1):
+        index = line_count - 1
+        line = line.rstrip("\n")
         if not buffer and line.strip():
             start = index
         if not line.strip():
             flush(index)
         else:
             buffer.append(line)
-    flush(len(lines))
+    flush(line_count)
     return _finalize(
         filename=filename,
         file_type=MaterialFileType.MARKDOWN if markdown else MaterialFileType.TXT,
@@ -141,12 +160,12 @@ def _parse_pdf(filename: str, content: bytes) -> ExtractedMaterial:
         for page_number, page in enumerate(reader.pages, start=1):
             text = _normalize_text(page.extract_text() or "")
             if text:
-                sections.append(ExtractedSection(
-                    ordinal=len(sections),
+                _append_section(
+                    sections,
                     locator_type=LocatorType.PAGE,
                     locator_label=f"第 {page_number} 页",
                     text=text,
-                ))
+                )
     except MaterialParseError:
         raise
     except Exception as exc:
@@ -195,23 +214,23 @@ def _parse_docx(filename: str, content: bytes) -> ExtractedMaterial:
                 if text:
                     style = (block.style.name if block.style else "").casefold()
                     heading = style.startswith("heading")
-                    sections.append(ExtractedSection(
-                        ordinal=len(sections),
+                    _append_section(
+                        sections,
                         locator_type=LocatorType.HEADING if heading else LocatorType.PARAGRAPH,
                         locator_label=text[:200] if heading else f"段落 {paragraph_number}",
                         text=text,
-                    ))
+                    )
             elif isinstance(block, Table):
                 table_number += 1
                 rows = [" | ".join(_normalize_text(cell.text) for cell in row.cells) for row in block.rows]
                 text = _normalize_text("\n".join(row for row in rows if row.strip(" |")))
                 if text:
-                    sections.append(ExtractedSection(
-                        ordinal=len(sections),
+                    _append_section(
+                        sections,
                         locator_type=LocatorType.TABLE,
                         locator_label=f"表格 {table_number}",
                         text=text,
-                    ))
+                    )
             for box in block._element.xpath(".//w:txbxContent"):
                 alternate = next(box.iterancestors(f"{mc}AlternateContent"), None)
                 if alternate is not None:
@@ -228,12 +247,12 @@ def _parse_docx(filename: str, content: bytes) -> ExtractedMaterial:
                 for number, paragraph in enumerate(box.iter(qn("w:p")), start=1):
                     text = _normalize_text(Paragraph(paragraph, document._body).text)
                     if text:
-                        sections.append(ExtractedSection(
-                            ordinal=len(sections),
+                        _append_section(
+                            sections,
                             locator_type=LocatorType.PARAGRAPH,
                             locator_label=f"文本框 {textbox_number} · 段落 {number}",
                             text=text,
-                        ))
+                        )
     except MaterialParseError:
         raise
     except Exception as exc:
