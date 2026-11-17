@@ -2,10 +2,20 @@
 
 import os
 import secrets
+import threading
+import time
 import unicodedata
+from collections import deque
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import Header, HTTPException
+
+
+# 简单的 in-process 速率限制（按 IP 对管理接口做保护）
+_admin_attempts_lock = threading.Lock()
+_admin_attempts: deque = deque()  # 时间戳队列
+_ADMIN_RATE_LIMIT = {"window_s": 60, "max_attempts": 10}
 
 
 DEFAULT_CORS_ORIGINS = (
@@ -25,11 +35,24 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def cors_origins() -> list[str]:
-    """返回允许跨域访问 API 的显式来源列表。"""
+    """返回允许跨域访问 API 的显式来源列表。
+
+    校验每个 origin 的协议必须是 http 或 https，防止
+    MAKO_CORS_ALLOW_ORIGINS 中混入 file://、data:// 等危险协议。
+    """
     raw = os.getenv("MAKO_CORS_ALLOW_ORIGINS", "").strip()
     if not raw:
         return list(DEFAULT_CORS_ORIGINS)
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    result = []
+    for origin in raw.split(","):
+        origin = origin.strip()
+        if not origin:
+            continue
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        result.append(origin)
+    return result or list(DEFAULT_CORS_ORIGINS)
 
 
 def validate_identifier(value: str, field_name: str) -> str:
@@ -48,6 +71,14 @@ async def require_admin_key(
     x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
 ) -> None:
     """保护调试、管理和高成本接口；未配置时保持关闭。"""
+    now = time.time()
+    with _admin_attempts_lock:
+        cutoff = now - _ADMIN_RATE_LIMIT["window_s"]
+        while _admin_attempts and _admin_attempts[0] < cutoff:
+            _admin_attempts.popleft()
+        if len(_admin_attempts) >= _ADMIN_RATE_LIMIT["max_attempts"]:
+            raise HTTPException(status_code=429, detail="管理接口请求过于频繁")
+        _admin_attempts.append(now)
     expected = os.getenv("MAKO_ADMIN_API_KEY", "").strip()
     if not expected:
         raise HTTPException(
