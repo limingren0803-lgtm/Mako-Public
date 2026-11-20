@@ -1,8 +1,10 @@
 import unittest
 from collections import Counter
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from core.intent_recognizer import IntentCategory, IntentRecognizer
-from evaluation.evaluator import DEFAULT_DIALOG_CASES, DEFAULT_INTENT_CASES, EndToEndEvaluator
+from evaluation.evaluator import DEFAULT_DIALOG_CASES, DEFAULT_INTENT_CASES, EndToEndEvaluator, LLMJudge
 
 
 CAREER_INTENTS = {
@@ -61,6 +63,27 @@ class EvaluationDatasetTests(unittest.TestCase):
         self.assertNotIn("message-1", context)
         self.assertIn("message-2", context)
         self.assertIn("message-9", context)
+
+
+class JudgeScoreBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_scores_fail_instead_of_polluting_evaluation(self):
+        judge = LLMJudge(object(), "test-model")
+        valid = '{"relevance": 1, "accuracy": 0, "completeness": 0.8, "helpfulness": 0.9}'
+        invalid = (
+            valid.replace('"relevance": 1', '"relevance": 9'),
+            valid.replace('"relevance": 1', '"relevance": -1'),
+            valid.replace('"relevance": 1', '"relevance": NaN'),
+            valid.replace('"relevance": 1', '"relevance": "0.9"'),
+            valid.replace('"relevance": 1', '"relevance": true'),
+            valid.replace('"relevance": 1, ', ''),
+        )
+        with patch("evaluation.evaluator.create_message", new_callable=AsyncMock) as create:
+            create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text=valid)])
+            self.assertFalse((await judge.judge("问题", "回答")).judge_failed)
+            for raw in invalid:
+                with self.subTest(raw=raw):
+                    create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text=raw)])
+                    self.assertTrue((await judge.judge("问题", "回答")).judge_failed)
 
 
 if __name__ == "__main__":

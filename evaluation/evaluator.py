@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import math
 import pathlib
 import statistics
 import time
@@ -110,12 +111,17 @@ Agent 响应: {response}
             )
             raw = extract_text_content(resp.content)
             data = extract_json_value(raw, dict)
-            return QualityScores(
-                relevance=float(data.get("relevance", 0.5)),
-                accuracy=float(data.get("accuracy", 0.5)),
-                completeness=float(data.get("completeness", 0.5)),
-                helpfulness=float(data.get("helpfulness", 0.5)),
-            )
+            keys = ("relevance", "accuracy", "completeness", "helpfulness")
+            values = {key: data.get(key) for key in keys}
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 <= value <= 1
+                for value in values.values()
+            ):
+                raise ValueError("invalid judge score")
+            return QualityScores(**{key: float(value) for key, value in values.items()})
         except Exception as ex:
             logger.warning("LLM Judge 失败: error_type=%s", type(ex).__name__)
             return QualityScores(
@@ -284,6 +290,11 @@ class EndToEndEvaluator:
 
         # 5. 优化建议
         recommendations = self._recommendations(avg_scores, intent_metrics)
+        judge_failed = any(result.metadata.get("judge_failed") for result in results)
+        if judge_failed:
+            recommendations = ["部分评分不可用，本次未更新评测基线；请复核后重试"] + [
+                item for item in recommendations if item != "所有指标均达标，继续保持"
+            ]
 
         report = EvalReport(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -295,8 +306,9 @@ class EndToEndEvaluator:
             recommendations=recommendations,
             results=results,
         )
-        self._history.append(report)
-        self._save_baseline(report)
+        if not judge_failed:
+            self._history.append(report)
+            self._save_baseline(report)
         return report
 
     async def _evaluate_dialog_case(self, case: Dict[str, Any], case_idx: int) -> List[EvalResult]:
@@ -328,7 +340,7 @@ class EndToEndEvaluator:
             response_complete = bool(getattr(orch_result, "response_complete", True))
             continuation_used = bool(getattr(orch_result, "continuation_used", False))
             quality_flags = list(getattr(orch_result, "quality_flags", []))
-            passed = scores.overall >= self.PASS_THRESHOLD and response_complete
+            passed = not scores.judge_failed and scores.overall >= self.PASS_THRESHOLD and response_complete
 
             history.append({"role": "user", "content": question})
             history.append({"role": "assistant", "content": actual_answer})
@@ -343,8 +355,9 @@ class EndToEndEvaluator:
                     "completeness": scores.completeness,
                     "helpfulness": scores.helpfulness,
                     "overall": scores.overall,
-                },
+                } if not scores.judge_failed else {},
                 detail=(
+                    "评分不可用，需复核" if scores.judge_failed else
                     f"Q: {question[:30]}... → 综合评分 {scores.overall:.3f}"
                     + ("；回答完整" if response_complete else "；回答可能不完整")
                 ),
